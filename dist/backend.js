@@ -64,9 +64,10 @@ function workshop(host) {
       connections: names(connections)
     };
   }
-  async function context(s, u) {
+  async function cardOverview(s, u) {
     const card = s.cardId ? await host.characters.get(s.cardId, u) : { name: s.title, system_prompt: s.kind === "scenario" ? narrator : "" };
-    check(card, "This card is no longer available.");
+    if (!card)
+      return null;
     const books = [];
     for (const id of card.world_book_ids ?? []) {
       const book = await host.world_books.get(id, u);
@@ -84,6 +85,14 @@ function workshop(host) {
         }))
       });
     }
+    return {
+      card: plainCard(card),
+      templates: Object.fromEntries(templates.map((f) => [f, card.extensions?.[NS]?.[f] ?? ""])),
+      books
+    };
+  }
+  async function context(s, u, overview) {
+    check(overview, "This card is no longer available.");
     let preset = null;
     if (s.presetId) {
       const record = await host.presets.get(s.presetId, u);
@@ -101,9 +110,7 @@ function workshop(host) {
     }
     return {
       kind: s.kind,
-      card: plainCard(card),
-      templates: Object.fromEntries(templates.map((f) => [f, card.extensions?.[NS]?.[f] ?? ""])),
-      books,
+      ...overview,
       preset,
       pending: s.pending
     };
@@ -202,20 +209,22 @@ function workshop(host) {
       };
       state.sessions.unshift(s);
       await save();
-      return { session: s, sessions: index() };
+      return { session: s, sessions: index(), overview: await cardOverview(s, u) };
     }
     const s = state.sessions.find((x) => x.id === req.id);
     check(s, "Workshop unavailable.");
     if (req.action === "open")
-      return { session: s };
+      return { session: s, overview: await cardOverview(s, u) };
     check(req.rev === s.rev, "This workshop changed. Reopen it before continuing.");
+    let overview;
     if (req.action === "settings") {
       s.presetId = req.presetId || null;
       s.connectionId = req.connectionId || null;
     } else if (req.action === "talk") {
       const text = string(req.text, "message", 32000).trim();
       check(text, "Enter a message.");
-      const ctx = await context(s, u);
+      overview = await cardOverview(s, u);
+      const ctx = await context(s, u, overview);
       const result = await host.generate.quiet({
         userId: u,
         connection_id: s.connectionId || undefined,
@@ -255,12 +264,12 @@ function workshop(host) {
         s.rev++;
         await save();
       }
-      return { session: s, sessions: index() };
+      return { session: s, sessions: index(), overview: await cardOverview(s, u) };
     } else
       throw new Error("Unknown workshop action.");
     s.rev++;
     await save();
-    return { session: s, sessions: index() };
+    return { session: s, sessions: index(), overview };
   }
   async function apply(s, p, u, save) {
     if (!s.cardId) {

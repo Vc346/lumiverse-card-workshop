@@ -132,6 +132,17 @@ test("brainstorm, revise, selectively apply, resume and detect concurrent edits"
   expect(f.entries[0].content).toBe("Ivo has the key.");
   expect(s.pending).toHaveLength(1);
   await cmd("review", { decision: "apply", ids: [s.pending[0].id] });
+  const { overview } = await run("alice", { action: "open", id: s.id });
+  expect(overview.card.description).toBe(changes[0].value);
+  expect(overview.card.personality).toBe("");
+  expect(overview.templates.inline_tracker).toBe(changes[2].value);
+  expect(overview.books[0].entries).toEqual([
+    { id: f.entries[0].id, ...changes[1].value },
+  ]);
+  f.cards[0].description = "Edited in Lumiverse.";
+  const refreshed = await run("alice", { action: "open", id: s.id });
+  expect(refreshed.overview.card.description).toBe("Edited in Lumiverse.");
+  expect(refreshed.session.rev).toBe(s.rev);
   expect(f.cards[0].extensions.voidverse_author.inline_tracker).toBe(
     changes[2].value,
   );

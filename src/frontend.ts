@@ -1,3 +1,19 @@
+const fieldLabels = {
+  name: "Name",
+  description: "Description",
+  personality: "Personality",
+  scenario: "Scenario",
+  first_mes: "Opening message",
+  alternate_greetings: "Alternate greetings",
+  mes_example: "Example dialogue",
+  creator_notes: "Creator notes",
+  system_prompt: "System prompt",
+  post_history_instructions: "Post-history instructions",
+  inline_tracker: "Inline tracker prompt",
+  summary_prompt: "Summary prompt",
+  ledger_prompt: "Ledger prompt",
+};
+
 export function setup(ctx) {
   const tab = ctx.ui.registerDrawerTab({
     id: "card-workshop",
@@ -17,6 +33,9 @@ export function setup(ctx) {
     .vv-author p,.vv-author pre {margin:0;white-space:pre-wrap;font:inherit}
     .vv-author.vv-editor {box-sizing:border-box;height:var(--vv-height,65vh);display:flex;flex-direction:column;overflow:auto}
     .vv-author .vv-controls {max-height:42%;flex:none;overflow:auto;display:grid;gap:8px}
+    .vv-author .vv-controls:has([data-section="overview"][open]) {max-height:65%}
+    .vv-author .vv-preview {display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--lumiverse-text-muted);font-size:.88em}
+    .vv-author details[open] > summary > .vv-preview {display:none}
     .vv-author h3 {margin:0}
     .vv-author .vv-log {flex:1 1 auto;min-height:0;overflow:auto;display:grid;align-content:start;gap:10px}
     .vv-author .vv-composer {flex:none;display:grid;gap:6px}
@@ -31,6 +50,7 @@ export function setup(ctx) {
   let library,
     sessions = [],
     session = null,
+    overview = null,
     busy = false,
     status = "",
     alive = true;
@@ -105,17 +125,20 @@ export function setup(ctx) {
     render();
     try {
       const data = await rpc({
-        action,
+        action: action === "refresh" ? "open" : action,
         id: session?.id,
         rev: session?.rev,
         ...args,
       });
+      if (data.overview !== undefined) overview = data.overview;
       if (data.catalog) library = data.catalog;
       if (data.sessions) sessions = data.sessions;
       if (data.session) {
         session = data.session;
-        preset = session.presetId || "";
-        connection = session.connectionId || "";
+        if (action !== "refresh") {
+          preset = session.presetId || "";
+          connection = session.connectionId || "";
+        }
       }
       if (["open", "start", "talk"].includes(action)) draft = "";
       selected = new Set();
@@ -125,7 +148,9 @@ export function setup(ctx) {
       // A host write may already have succeeded when a later proposal failed.
       if (session && action === "review") {
         try {
-          session = (await rpc({ action: "open", id: session.id })).session;
+          const data = await rpc({ action: "open", id: session.id });
+          session = data.session;
+          overview = data.overview;
         } catch {}
       }
     } finally {
@@ -230,6 +255,7 @@ export function setup(ctx) {
       run("settings", { presetId: preset, connectionId: connection }),
     );
     proposals(controls);
+    cardAndLore(controls);
     const log = element(root, "div");
     log.className = "vv-log";
     for (const message of session.messages) {
@@ -263,6 +289,66 @@ export function setup(ctx) {
       for (const item of value) element(element(list, "li"), "p", item);
     } else {
       element(parent, "p", value?.length ? value : "(empty)");
+    }
+  }
+  function preview(details, value) {
+    if (!value) return;
+    const text = element(details.querySelector("summary"), "span", value);
+    text.className = "vv-preview";
+  }
+  function cardAndLore(parent) {
+    const section = disclosure(parent, "overview", "Card & lore");
+    button(section, "Refresh from Lumiverse", () => run("refresh"));
+    if (!overview) {
+      element(section, "p", "The linked card is unavailable.");
+      return;
+    }
+    const { card, templates, books } = overview;
+    const pending = new Set(session.pending.map((p) => p.id));
+    for (const [target, label, fields] of [
+      ["card", "Card fields", card],
+      ["template", "Workshop prompts", templates],
+    ]) {
+      element(section, "strong", label);
+      for (const [field, value] of Object.entries(fields)) {
+        const id = target + "." + field;
+        const snippet = (Array.isArray(value) ? value[0] : value)?.trim();
+        const state = snippet ? (session.cardId ? "Saved" : "Draft") : "Empty";
+        const details = disclosure(
+          section,
+          "current:" + id,
+          fieldLabels[field] + " · " + state + (pending.has(id) ? " · Pending edit" : ""),
+        );
+        preview(details, snippet?.split("\n")[0]);
+        displayValue(details, value);
+      }
+    }
+    element(section, "strong", "Lorebooks");
+    const drafts = session.pending.filter((p) => p.target === "new_lore");
+    if (!books.length)
+      element(section, "p", "No linked lorebooks. Ask the workshop to draft an entry to start one.");
+    for (const book of books) {
+      const group = disclosure(section, "book:" + book.id, book.name + " (" + book.entries.length + ")");
+      if (!book.entries.length) element(group, "p", "No saved entries.");
+      for (const entry of book.entries) {
+        const hasEdit = session.pending.some((p) => p.target === "lore" && p.entryId === entry.id);
+        const details = disclosure(group, "entry:" + entry.id,
+          (entry.comment || "Untitled entry") + (hasEdit ? " · Pending edit" : ""));
+        preview(details, entry.content?.trim().split("\n")[0]);
+        element(details, "strong", "Activation keywords");
+        displayValue(details, entry.key);
+        element(details, "strong", "Entry text");
+        displayValue(details, entry.content);
+      }
+    }
+    for (const draft of drafts) {
+      const details = disclosure(section, "lore-draft:" + draft.id, draft.label + " · Pending");
+      preview(details, draft.value.content.trim().split("\n")[0]);
+      element(details, "strong", "Activation keywords");
+      displayValue(details, draft.value.key);
+      element(details, "strong", "Entry text");
+      displayValue(details, draft.value.content);
+      element(details, "p", "Apply this entry from Proposed changes.");
     }
   }
   function proposals(parent) {
@@ -314,7 +400,9 @@ export function setup(ctx) {
   }
   function render() {
     const scope = session?.id ?? "";
-    if (root.dataset.session === scope) {
+    const sameSession = root.dataset.session === scope;
+    const controlsScroll = sameSession ? root.querySelector(".vv-controls")?.scrollTop ?? 0 : 0;
+    if (sameSession) {
       openSections = new Set(
         Array.from(root.querySelectorAll("details[data-section][open]"),
           (details) => details.dataset.section),
@@ -335,6 +423,8 @@ export function setup(ctx) {
       p.setAttribute("role", "status");
     }
     if (!library && !busy) button(root, "Reload workshop", () => run("home"));
+    const controls = root.querySelector(".vv-controls");
+    if (controls) controls.scrollTop = controlsScroll;
     fitEditor();
   }
   run("home");
