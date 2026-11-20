@@ -9,6 +9,7 @@ var fields = [
   "personality",
   "scenario",
   "first_mes",
+  "alternate_greetings",
   "mes_example",
   "creator_notes",
   "system_prompt",
@@ -19,7 +20,10 @@ var instruction = `You are a collaborative fiction editor. Discuss options freel
 Treat the user's card, lore and preset as reference material. Preserve the author's voice and unrelated facts.
 For an ensemble scenario, let the narrator portray the cast and setting; leave the player's actions to the player.
 Return JSON {"reply":"conversational answer","changes":[]}. For brainstorming use an empty array.
-Each change has target, field and value. For target "card", use one of the supplied card fields and a replacement string.
+Each change has target, field and value. For target "card", use one of the supplied card fields.
+Use a replacement string except for alternate_greetings, which takes an ordered array of alternate opening messages.
+first_mes is the primary opening message, mes_example is example dialogue, system_prompt sets the roleplay instructions, and post_history_instructions guides the model after the chat history.
+When asked to draft a complete card, propose the relevant fields separately so they can be reviewed individually. Include an opening message, and use alternate greetings, dialogue examples and prompt overrides when they serve the request. Preserve populated fields unless the user wants them revised.
 For target "template", use inline_tracker, summary_prompt or ledger_prompt and a replacement string.
 For target "lore", supply entryId from context, field "content" or "comment" with replacement text, or field "key" with a list of activation keywords.
 For target "new_lore", supply bookId from context (empty for the card's dedicated workshop book),
@@ -42,7 +46,9 @@ async function pages(fetchPage) {
       return result;
   }
 }
-var plainCard = (card) => Object.fromEntries(fields.map((field) => [field, card[field] ?? ""]));
+var cardValue = (card, field) => card[field] ?? (field === "alternate_greetings" ? [] : "");
+var plainCard = (card) => Object.fromEntries(fields.map((field) => [field, cardValue(card, field)]));
+var sameValue = (a, b) => a === b || Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((value, i) => value === b[i]);
 function workshop(host) {
   const locks = new Map;
   async function catalog(userId) {
@@ -107,7 +113,12 @@ function workshop(host) {
     let key, before, value;
     if (target === "card" || target === "template") {
       check((target === "card" ? fields : templates).includes(field), "Unknown card or template field.");
-      value = string(raw.value, field);
+      if (target === "card" && field === "alternate_greetings") {
+        check(Array.isArray(raw.value), "Alternate greetings must be a list.");
+        value = raw.value.map((greeting) => string(greeting, "alternate greeting"));
+      } else {
+        value = string(raw.value, field);
+      }
       if (field === "name")
         check(value.trim(), "A card needs a name.");
       key = target + "." + field;
@@ -266,8 +277,8 @@ function workshop(host) {
     check(card, "Card unavailable.");
     const meta = card.extensions?.[NS] ?? {};
     if (p.target === "card" || p.target === "template") {
-      const current = (p.target === "card" ? card : meta)[p.field] ?? "";
-      check(current === p.before || current === p.value, "Field changed since proposal: " + p.label + ". Discard it or request a revision.");
+      const current = p.target === "card" ? cardValue(card, p.field) : meta[p.field] ?? "";
+      check(sameValue(current, p.before) || sameValue(current, p.value), "Field changed since proposal: " + p.label + ". Discard it or request a revision.");
       const patch = p.target === "card" ? { [p.field]: p.value } : {
         extensions: {
           [NS]: { ...meta, kind: s.kind, [p.field]: p.value }

@@ -16,7 +16,15 @@ function setup(ctx) {
     .vv-author button:disabled {opacity:.55}
     .vv-author textarea {width:100%;box-sizing:border-box}
     .vv-author p,.vv-author pre {margin:0;white-space:pre-wrap;font:inherit}
-    .vv-author .vv-log {max-height:46vh;overflow:auto;display:grid;gap:10px}
+    .vv-author.vv-editor {box-sizing:border-box;height:var(--vv-height,65vh);display:flex;flex-direction:column;overflow:auto}
+    .vv-author .vv-controls {max-height:42%;flex:none;overflow:auto;display:grid;gap:8px}
+    .vv-author h3 {margin:0}
+    .vv-author .vv-log {flex:1 1 auto;min-height:0;overflow:auto;display:grid;align-content:start;gap:10px}
+    .vv-author .vv-composer {flex:none;display:grid;gap:6px}
+    .vv-author .vv-composer textarea {font-size:max(16px,1em);resize:vertical}
+    .vv-author .vv-proposal {display:grid;grid-template-columns:auto minmax(0,1fr);align-items:start;gap:6px}
+    .vv-author details > summary {cursor:pointer}
+    .vv-author details[open] > summary {margin-bottom:6px}
     .vv-author article,.vv-author details {border:1px solid var(--lumiverse-border);padding:10px;border-radius:8px}
     .vv-author .vv-actions {display:flex;gap:6px;flex-wrap:wrap}
     .vv-author .vv-status {color:var(--lumiverse-text-muted)}
@@ -24,6 +32,31 @@ function setup(ctx) {
   let library, sessions = [], session = null, busy = false, status = "", alive = true;
   let draft = "", setupCard = "", setupTitle = "", setupKind = "character", preset = "", connection = "";
   let selected = new Set;
+  let openSections = new Set;
+  let viewportFrame = 0;
+  const viewport = window.visualViewport;
+  function fitEditor() {
+    if (viewportFrame)
+      return;
+    viewportFrame = window.requestAnimationFrame(() => {
+      viewportFrame = 0;
+      if (!session || !root.getClientRects().length)
+        return;
+      const top = root.getBoundingClientRect().top;
+      let bottom = (viewport?.offsetTop ?? 0) + (viewport?.height ?? window.innerHeight);
+      for (let parent = root.parentElement;parent; parent = parent.parentElement) {
+        if (/^(auto|scroll|hidden|clip)$/.test(getComputedStyle(parent).overflowY))
+          bottom = Math.min(bottom, parent.getBoundingClientRect().bottom);
+      }
+      root.style.setProperty("--vv-height", Math.max(1, Math.floor(bottom - top)) + "px");
+    });
+  }
+  const resize = new ResizeObserver(fitEditor);
+  resize.observe(root);
+  viewport?.addEventListener("resize", fitEditor);
+  viewport?.addEventListener("scroll", fitEditor);
+  window.addEventListener("resize", fitEditor);
+  root.addEventListener("focusin", fitEditor);
   let sequence = 0;
   const waiting = new Map;
   const unsubscribe = ctx.onBackendMessage((msg) => {
@@ -148,7 +181,9 @@ function setup(ctx) {
     }));
   }
   function editor() {
-    button(root, "← Workshops", () => {
+    const controls = element(root, "div");
+    controls.className = "vv-controls";
+    button(controls, "← Workshops", () => {
       session = null;
       draft = "";
       preset = "";
@@ -156,11 +191,11 @@ function setup(ctx) {
       selected.clear();
       run("home");
     });
-    element(root, "h3", session.title);
-    const settings = element(root, "details");
-    element(settings, "summary", "Workshop settings");
+    element(controls, "h3", session.title);
+    const settings = disclosure(controls, "settings", "Workshop settings");
     selectors(settings);
     button(settings, "Save settings", () => run("settings", { presetId: preset, connectionId: connection }));
+    proposals(controls);
     const log = element(root, "div");
     log.className = "vv-log";
     for (const message of session.messages) {
@@ -169,36 +204,58 @@ function setup(ctx) {
       element(row, "p", message.content);
     }
     log.scrollTop = log.scrollHeight;
-    const input = element(element(root, "label", "Workshop message"), "textarea");
+    const composer = element(root, "div");
+    composer.className = "vv-composer";
+    const input = element(element(composer, "label", "Workshop message"), "textarea");
     input.rows = 3;
     input.value = draft;
     input.disabled = busy;
     input.oninput = () => draft = input.value;
-    button(root, "Send", () => run("talk", { text: draft }));
-    if (!session.pending.length)
+    button(composer, "Send", () => run("talk", { text: draft }));
+  }
+  function disclosure(parent, id, title) {
+    const details = element(parent, "details");
+    details.dataset.section = id;
+    details.open = openSections.has(id);
+    element(details, "summary", title);
+    return details;
+  }
+  function displayValue(parent, value) {
+    if (Array.isArray(value) && value.length) {
+      const list = element(parent, "ol");
+      for (const item of value)
+        element(element(list, "li"), "p", item);
+    } else {
+      element(parent, "p", value?.length ? value : "(empty)");
+    }
+  }
+  function proposals(parent) {
+    const review = disclosure(parent, "proposals", "Proposed changes (" + session.pending.length + ")");
+    if (!session.pending.length) {
+      element(review, "p", "No pending changes. Ask the workshop to draft or revise a field.");
       return;
-    element(root, "h3", "Review proposed changes");
+    }
     if (!session.cardId)
-      element(root, "p", "Applying your first selection creates this card in the library.");
+      element(review, "p", "Applying your first selection creates this card in the library.");
     for (const p of session.pending) {
-      const row = element(root, "article");
-      const label = element(row, "label");
-      const box = element(label, "input");
+      const row = element(review, "div");
+      row.className = "vv-proposal";
+      const box = element(row, "input");
       box.type = "checkbox";
+      box.setAttribute("aria-label", "Select " + p.label);
       box.checked = selected.has(p.id);
       box.disabled = busy;
       box.onchange = () => box.checked ? selected.add(p.id) : selected.delete(p.id);
-      label.append(document.createTextNode(p.label));
+      const details = disclosure(row, "proposal:" + p.id, p.label);
       if (p.before !== null) {
-        const details = element(row, "details");
-        element(details, "summary", "Current value");
-        element(details, "p", p.before || "(empty)");
+        element(details, "strong", "Current value");
+        displayValue(details, p.before);
       }
-      element(row, "strong", "Proposed value");
-      element(row, "p", p.target === "new_lore" ? p.value.key.join(", ") + `
+      element(details, "strong", "Proposed value");
+      displayValue(details, p.target === "new_lore" ? p.value.key.join(", ") + `
 ` + p.value.content : p.value);
     }
-    const actions = element(root, "div");
+    const actions = element(review, "div");
     actions.className = "vv-actions";
     for (const [decision, label] of [
       ["apply", "Apply selected"],
@@ -207,6 +264,14 @@ function setup(ctx) {
       button(actions, label, () => run("review", { decision, ids: [...selected] }));
   }
   function render() {
+    const scope = session?.id ?? "";
+    if (root.dataset.session === scope) {
+      openSections = new Set(Array.from(root.querySelectorAll("details[data-section][open]"), (details) => details.dataset.section));
+    } else {
+      openSections.clear();
+    }
+    root.dataset.session = scope;
+    root.classList.toggle("vv-editor", Boolean(session));
     root.replaceChildren();
     if (library) {
       if (session)
@@ -221,11 +286,18 @@ function setup(ctx) {
     }
     if (!library && !busy)
       button(root, "Reload workshop", () => run("home"));
+    fitEditor();
   }
   run("home");
   return () => {
     alive = false;
     unsubscribe();
+    resize.disconnect();
+    viewport?.removeEventListener("resize", fitEditor);
+    viewport?.removeEventListener("scroll", fitEditor);
+    window.removeEventListener("resize", fitEditor);
+    root.removeEventListener("focusin", fitEditor);
+    window.cancelAnimationFrame(viewportFrame);
     for (const finish of waiting.values())
       finish({ error: "Workshop closed" });
     removeStyle();

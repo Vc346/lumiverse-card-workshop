@@ -14,11 +14,11 @@ For subsequent releases, use **Update** in the Spindle panel.
 
 Try asking “Give me two ways to differentiate Mara and Ivo’s voices.” Then ask “Use the second option for the card, create a keyword lore entry about Ivo’s secret, and propose an inline tracker that records who knows it.”
 
-Open **Current value** to compare an existing field with the proposal. Select the changes you want and choose **Apply selected**. Other proposals stay available for revision or dismissal. Applying the first selection in a new workshop creates the library card. To continue later, select the same conversation under **Workshops**. Open the resulting card in Lumiverse to start a regular roleplay chat.
+Open **Proposed changes**, then expand any proposal to compare its current and proposed values. Select the changes you want and choose **Apply selected**. Other proposals stay available for revision or dismissal. Applying the first selection in a new workshop creates the library card. To continue later, select the same conversation under **Workshops**. Open the resulting card in Lumiverse to start a regular roleplay chat.
 
 ## What gets saved
 
-- Native card fields include description, personality, scenario, greeting, example dialogue, creator notes and system instructions. New ensemble cards include a narrator instruction that preserves player agency.
+- The workshop can propose changes to the name, description, personality, scenario, opening message, alternate greetings, example dialogue, creator notes, system prompt and post-history instructions. New ensemble cards include a narrator instruction that preserves player agency.
 - The workshop reads directly attached world books. It can create keyword entries and revise entry titles, activation keys and content. If a new entry needs a dedicated book, applying it creates or reuses the card’s workshop book and attaches it.
 - Card-specific templates live under `character.extensions.voidverse_author` as `inline_tracker`, `summary_prompt` and `ledger_prompt`. These are authoring outputs for the planned continuity integration.
 - The selected preset provides enabled blocks in stored order, including their roles and placement. The model receives their authored text, linked lore, card fields, pending edits and workshop conversation. Model context limits apply to large presets, books and conversations.

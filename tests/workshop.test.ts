@@ -165,3 +165,38 @@ test("brainstorm, revise, selectively apply, resume and detect concurrent edits"
     run("alice", { action: "talk", rev: 0, id: s.id, text: "stale" }),
   ).rejects.toThrow("changed");
 });
+
+test("alternate greetings preserve order and detect edits made after a proposal", async () => {
+  const f = fixture();
+  const run = workshop(f.host);
+  await f.host.characters.create({
+    name: "Archive",
+    alternate_greetings: ["The doors open.", "The lights go out."],
+  });
+  const [card] = f.cards;
+  const { session } = await run("alice", { action: "start", cardId: card.id });
+  const value = ["Mara unlocks the archive.", "Ivo knocks twice."];
+  f.respond({
+    reply: "Here are two alternate openings.",
+    changes: [{ target: "card", field: "alternate_greetings", value }],
+  });
+  const propose = (rev) =>
+    run("alice", { action: "talk", id: session.id, rev, text: "Revise the alternate greetings." });
+  const first = (await propose(session.rev)).session;
+  expect(first.pending[0].before).toEqual(card.alternate_greetings);
+  const apply = (s) =>
+    run("alice", {
+      action: "review",
+      id: s.id,
+      rev: s.rev,
+      decision: "apply",
+      ids: [s.pending[0].id],
+    });
+  const applied = (await apply(first)).session;
+  expect(card.alternate_greetings).toEqual(value);
+
+  const revised = (await propose(applied.rev)).session;
+  card.alternate_greetings = [...value].reverse();
+  await expect(apply(revised)).rejects.toThrow("changed since proposal");
+  expect(card.alternate_greetings).toEqual([...value].reverse());
+});
