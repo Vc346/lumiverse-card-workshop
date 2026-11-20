@@ -41,7 +41,7 @@ export function setup(ctx) {
       max-width: 100%;
       box-sizing: border-box;
     }
-    .vv-author :where(.vv-field, .vv-picker, .vv-controls, .vv-log, article, details[open]) {
+    .vv-author :where(.vv-field, .vv-picker, .vv-controls, .vv-log, details[open]) {
       display: grid;
       grid-template-columns: minmax(0, 1fr);
       gap: 8px;
@@ -92,17 +92,68 @@ export function setup(ctx) {
       min-height: 0;
       overflow: hidden auto;
       align-content: start;
-      padding-inline: 2px;
+      gap: 16px;
+      padding: 14px 2px 10px;
+      border-top: 1px solid var(--lumiverse-border);
     }
-    .vv-author :where(article, details) {
+    .vv-author details {
       padding: 10px;
       border: 1px solid var(--lumiverse-border);
       border-radius: var(--lumiverse-radius, 8px);
       background: var(--lumiverse-fill-subtle);
     }
-    .vv-author article[data-role="assistant"] {
-      border-inline-start: 3px solid var(--lumiverse-accent);
+    .vv-author .vv-message {
+      --vv-message-accent: var(--lumiverse-accent, #8c70c7);
+      display: grid;
+      grid-template-columns: 28px minmax(0, 1fr);
+      align-items: start;
+      gap: 8px;
     }
+    .vv-author .vv-message[data-role="user"] {
+      --vv-message-accent: var(--lumiverse-text);
+      grid-template-columns: minmax(0, 1fr) 28px;
+      padding-inline-start: min(8%, 40px);
+    }
+    .vv-author .vv-avatar {
+      display: grid;
+      place-items: center;
+      aspect-ratio: 1;
+      border-radius: 50%;
+      background: var(--lumiverse-fill);
+      background: color-mix(in srgb, var(--vv-message-accent) 17%, var(--lumiverse-fill));
+      color: var(--vv-message-accent);
+      font-size: .8em;
+      font-weight: 700;
+    }
+    .vv-author .vv-message[data-role="user"] .vv-avatar {
+      grid-column: 2;
+      grid-row: 1;
+    }
+    .vv-author .vv-bubble {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      min-width: 0;
+      gap: 6px;
+      padding: 10px 12px;
+      border: 1px solid var(--lumiverse-border);
+      border-inline-start: 3px solid var(--vv-message-accent);
+      border-radius: 4px 14px 14px;
+      background: var(--lumiverse-fill);
+      background: color-mix(in srgb, var(--vv-message-accent) 10%, var(--lumiverse-fill));
+    }
+    .vv-author .vv-message[data-role="user"] .vv-bubble {
+      grid-column: 1;
+      grid-row: 1;
+      justify-self: end;
+      max-width: 100%;
+      box-sizing: border-box;
+      border-inline-start: 1px solid var(--lumiverse-border);
+      border-radius: 14px 4px 14px 14px;
+      background: var(--lumiverse-fill-subtle);
+    }
+    .vv-author .vv-message strong { color: var(--vv-message-accent); font-size: .85em }
+    .vv-author .vv-message p { line-height: 1.55 }
+    .vv-author .vv-log .vv-status { padding-inline-start: 36px; font-size: .875em }
     .vv-author details > summary { cursor: pointer; font-weight: 600 }
     .vv-author .vv-preview {
       display: block;
@@ -122,10 +173,19 @@ export function setup(ctx) {
       grid-template-columns: minmax(0, 1fr) auto;
       align-items: end;
       gap: 8px;
-      padding-top: 8px;
-      border-top: 1px solid var(--lumiverse-border);
+      padding: 8px;
+      border: 1px solid var(--lumiverse-border);
+      border-radius: 18px;
+      background: var(--lumiverse-fill-subtle);
     }
-    .vv-author .vv-composer textarea { width: 100%; font-size: max(16px, 1em); resize: none }
+    .vv-author .vv-composer:focus-within { border-color: var(--lumiverse-accent) }
+    .vv-author .vv-composer textarea {
+      width: 100%;
+      border-radius: 12px;
+      font-size: max(16px, 1em);
+      resize: none;
+    }
+    .vv-author .vv-composer button { border-radius: 12px; min-height: 44px }
     .vv-author .vv-proposal {
       display: grid;
       grid-template-columns: auto minmax(0, 1fr);
@@ -381,19 +441,28 @@ export function setup(ctx) {
     cardAndLore(controls);
     const log = element(root, "div");
     log.className = "vv-log";
+    log.setAttribute("aria-label", "Workshop conversation");
     for (const message of session.messages) {
       const row = element(log, "article");
+      row.className = "vv-message";
       row.dataset.role = message.role;
-      element(row, "strong", message.role === "user" ? "You" : "Author");
-      element(row, "p", message.content);
+      const isUser = message.role === "user";
+      const avatar = element(row, "span", isUser ? "Y" : "A");
+      avatar.className = "vv-avatar";
+      avatar.setAttribute("aria-hidden", "true");
+      const bubble = element(row, "div");
+      bubble.className = "vv-bubble";
+      element(bubble, "strong", isUser ? "You" : "Author");
+      element(bubble, "p", message.content);
     }
+    if (status === "Writing…") showStatus(log);
     log.scrollTop = log.scrollHeight;
     const composer = element(root, "div");
     composer.className = "vv-composer";
-    const label = element(composer, "label", "Workshop message");
-    label.className = "vv-field";
-    const input = element(label, "textarea");
+    const input = element(composer, "textarea");
     input.className = "vv-input";
+    input.setAttribute("aria-label", "Workshop message");
+    input.placeholder = "Message the author…";
     input.rows = 2;
     input.value = draft;
     input.disabled = busy;
@@ -522,6 +591,11 @@ export function setup(ctx) {
     ])
       button(actions, label, () => run("review", { decision, ids: [...selected] }), decision === "apply");
   }
+  function showStatus(parent) {
+    const line = element(parent, "p", status);
+    line.className = "vv-status";
+    line.setAttribute("role", "status");
+  }
   function render() {
     const scope = session?.id ?? "";
     const sameSession = root.dataset.session === scope;
@@ -542,11 +616,7 @@ export function setup(ctx) {
       if (session) editor();
       else home();
     }
-    if (status) {
-      const p = element(root, "p", status);
-      p.className = "vv-status";
-      p.setAttribute("role", "status");
-    }
+    if (status && status !== "Writing…") showStatus(root);
     if (!library && !busy) button(root, "Reload workshop", () => run("home"));
     const controls = root.querySelector(".vv-controls");
     if (controls) controls.scrollTop = controlsScroll;
