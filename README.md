@@ -14,13 +14,13 @@ For subsequent releases, use **Update** in the Spindle panel.
 
 Try asking “Give me two ways to differentiate Mara and Ivo’s voices.” Then ask “Use the second option for the card, create a keyword lore entry about Ivo’s secret, and propose an inline tracker that records who knows it.”
 
-Open **Proposed changes**, then expand any proposal to compare its current and proposed values. Select the changes you want and choose **Apply selected**. Other proposals stay available for revision or dismissal. Applying the first selection in a new workshop creates the library card. To continue later, select the same conversation under **Workshops**. Open the resulting card in Lumiverse to start a regular roleplay chat.
+Open the **Review** tab, then expand any proposal to compare its current and proposed values. Select the changes you want and choose **Apply selected**. Other proposals stay available for revision or dismissal. Applying the first selection in a new workshop creates the library card. To continue later, select the same conversation under **Workshops**. Open the resulting card in Lumiverse to start a regular roleplay chat.
 
 ## Card and lore overview
 
 Open **Card & lore** to see which card fields and workshop prompts are saved, empty, or have pending edits. Expand a row for its full text. The overview loads when you open the workshop and updates after applying changes. Use **Refresh from Lumiverse** after editing the card elsewhere.
 
-Expand a linked lorebook to see its entries and activation keywords. To create an entry, ask the workshop to draft one and name a linked lorebook if you have a specific destination. Approve it in **Proposed changes**. If you leave the destination up to the workshop, it can use a dedicated lorebook that the extension creates and attaches on approval.
+Expand a linked lorebook to see its entries and activation keywords. To create an entry, ask the workshop to draft one and name a linked lorebook if you have a specific destination. Approve it in **Review**. If you leave the destination up to the workshop, it can use a dedicated lorebook that the extension creates and attaches on approval.
 
 ## What gets saved
 

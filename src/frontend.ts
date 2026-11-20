@@ -14,6 +14,13 @@ const fieldLabels = {
   ledger_prompt: "Ledger prompt",
 };
 
+const tabs = [
+  { id: "chat", label: "Chat", icon: "M3 4h18v12H8l-5 4V4z" },
+  { id: "review", label: "Review", icon: "M6 3h12v18H6z M9 12l2 2 4-5" },
+  { id: "card", label: "Card & lore", icon: "M3 5h7l2 2h9v12H3z M7 12h10 M7 15h7" },
+  { id: "settings", label: "Workshop settings", icon: "M4 6h16 M4 12h16 M4 18h16 M8 4v4 M16 10v4 M10 16v4" },
+];
+
 export function setup(ctx) {
   const tab = ctx.ui.registerDrawerTab({
     id: "card-workshop",
@@ -36,12 +43,12 @@ export function setup(ctx) {
       font: inherit;
       overflow-wrap: anywhere;
     }
-    .vv-author :where(.vv-controls, .vv-log, .vv-composer, .vv-picker, article, details, summary) {
+    .vv-author :where(.vv-panel, .vv-log, .vv-composer, .vv-picker, article, details, summary) {
       min-width: 0;
       max-width: 100%;
       box-sizing: border-box;
     }
-    .vv-author :where(.vv-field, .vv-picker, .vv-controls, .vv-log, details[open]) {
+    .vv-author :where(.vv-field, .vv-picker, .vv-panel:not([data-view="chat"]), .vv-log, details[open]) {
       display: grid;
       grid-template-columns: minmax(0, 1fr);
       gap: 8px;
@@ -78,23 +85,67 @@ export function setup(ctx) {
       flex-direction: column;
       overflow: hidden auto;
     }
-    .vv-author .vv-heading { display: flex; align-items: center; gap: 12px }
-    .vv-author .vv-heading h3 { min-width: 0 }
-    .vv-author .vv-controls {
+    .vv-author .vv-heading {
       flex: none;
-      max-height: 46%;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--lumiverse-border);
+    }
+    .vv-author .vv-heading h3 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+    .vv-author .vv-tabs { display: flex; gap: 2px }
+    .vv-author .vv-icon-button {
+      display: grid;
+      place-items: center;
+      position: relative;
+      box-sizing: border-box;
+      width: clamp(32px, 10vw, 42px);
+      height: 44px;
+      min-height: 44px;
+      padding: 0;
+      background: transparent;
+      border-color: transparent;
+      color: var(--lumiverse-text-muted);
+    }
+    .vv-author .vv-icon-button[aria-selected="true"] {
+      background: var(--lumiverse-fill-subtle);
+      border-bottom: 2px solid var(--lumiverse-accent, #8c70c7);
+      color: var(--lumiverse-accent, #8c70c7);
+    }
+    .vv-author .vv-count {
+      position: absolute;
+      top: 1px;
+      right: 0;
+      min-width: 14px;
+      padding: 1px 3px;
+      border-radius: 10px;
+      background: var(--lumiverse-accent, #8c70c7);
+      color: var(--lumiverse-accent-fg, #fff);
+      font-size: 10px;
+      line-height: 12px;
+    }
+    .vv-author .vv-panel {
+      flex: 1 1 auto;
+      min-height: 0;
       overflow: hidden auto;
       align-content: start;
     }
-    .vv-author .vv-controls:has(> details[open]) { max-height: 65% }
+    .vv-author .vv-panel[data-view="chat"] {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      overflow: hidden;
+    }
     .vv-author .vv-log {
       flex: 1 1 auto;
       min-height: 0;
       overflow: hidden auto;
       align-content: start;
       gap: 16px;
-      padding: 14px 2px 10px;
-      border-top: 1px solid var(--lumiverse-border);
+      padding: 2px 2px 10px;
     }
     .vv-author details {
       padding: 10px;
@@ -214,7 +265,9 @@ export function setup(ctx) {
     for (const component of components.splice(0)) component.destroy();
   }
   let selected = new Set();
-  let openSections = new Set();
+  let activeTab = "chat";
+  const openSections = new Map();
+  const scrollPositions = new Map();
   let viewportFrame = 0;
   const viewport = window.visualViewport;
 
@@ -275,7 +328,7 @@ export function setup(ctx) {
     if (busy) return;
     busy = true;
     status = action === "talk" ? "Writing…" : "Loading…";
-    render();
+    render(action === "talk");
     try {
       const data = await rpc({
         action: action === "refresh" ? "open" : action,
@@ -308,7 +361,7 @@ export function setup(ctx) {
       }
     } finally {
       busy = false;
-      if (alive) render();
+      if (alive) render(action === "talk");
     }
   }
   function element(parent, tag, text = "") {
@@ -418,12 +471,38 @@ export function setup(ctx) {
       true,
     );
   }
+  function iconButton(parent, label, path, onClick) {
+    const control = button(parent, "", onClick);
+    control.classList.add("vv-icon-button");
+    control.setAttribute("aria-label", label);
+    control.title = label;
+    const ns = "http://www.w3.org/2000/svg";
+    const icon = document.createElementNS(ns, "svg");
+    icon.setAttribute("viewBox", "0 0 24 24");
+    icon.setAttribute("width", "19");
+    icon.setAttribute("height", "19");
+    icon.setAttribute("aria-hidden", "true");
+    icon.setAttribute("fill", "none");
+    icon.setAttribute("stroke", "currentColor");
+    icon.setAttribute("stroke-width", "1.7");
+    icon.setAttribute("stroke-linecap", "round");
+    icon.setAttribute("stroke-linejoin", "round");
+    const shape = document.createElementNS(ns, "path");
+    shape.setAttribute("d", path);
+    icon.appendChild(shape);
+    control.appendChild(icon);
+    return control;
+  }
+  function activateTab(id) {
+    if (activeTab === id) return;
+    activeTab = id;
+    render();
+    root.querySelector('[role="tab"][aria-selected="true"]')?.focus();
+  }
   function editor() {
-    const controls = element(root, "div");
-    controls.className = "vv-controls";
-    const heading = element(controls, "div");
+    const heading = element(root, "div");
     heading.className = "vv-heading";
-    button(heading, "← Workshops", () => {
+    iconButton(heading, "Back to workshops", "M19 12H5 M11 6l-6 6 6 6", () => {
       session = null;
       draft = "";
       preset = "";
@@ -431,15 +510,61 @@ export function setup(ctx) {
       selected.clear();
       run("home");
     });
-    element(heading, "h3", session.title);
-    const settings = disclosure(controls, "settings", "Workshop settings");
-    selectors(settings);
-    button(settings, "Save settings", () =>
-      run("settings", { presetId: preset, connectionId: connection }),
-    );
-    proposals(controls);
-    cardAndLore(controls);
-    const log = element(root, "div");
+    const title = element(heading, "h3", session.title);
+    title.title = session.title;
+    const tablist = element(heading, "div");
+    tablist.className = "vv-tabs";
+    tablist.setAttribute("role", "tablist");
+    tablist.setAttribute("aria-label", "Workshop views");
+    const prefix = "vv-workshop-" + session.id;
+    const panelId = prefix + "-panel";
+    tabs.forEach(({ id, label, icon }, index) => {
+      const tab = iconButton(tablist, label, icon, () => activateTab(id));
+      tab.disabled = false;
+      tab.id = prefix + "-" + id;
+      tab.setAttribute("role", "tab");
+      tab.setAttribute("aria-selected", String(activeTab === id));
+      tab.setAttribute("aria-controls", panelId);
+      tab.tabIndex = activeTab === id ? 0 : -1;
+      if (id === "review" && session.pending.length) {
+        const count = session.pending.length;
+        tab.setAttribute("aria-label", "Review (" + count + " pending)");
+        const badge = element(tab, "span", count > 99 ? "99+" : String(count));
+        badge.className = "vv-count";
+        badge.setAttribute("aria-hidden", "true");
+      }
+      tab.onkeydown = (event) => {
+        const next = {
+          ArrowLeft: (index + tabs.length - 1) % tabs.length,
+          ArrowRight: (index + 1) % tabs.length,
+          Home: 0,
+          End: tabs.length - 1,
+        }[event.key];
+        if (next === undefined) return;
+        event.preventDefault();
+        activateTab(tabs[next].id);
+      };
+    });
+    const panel = element(root, "section");
+    panel.className = "vv-panel";
+    panel.id = panelId;
+    panel.dataset.view = activeTab;
+    panel.setAttribute("role", "tabpanel");
+    panel.setAttribute("aria-labelledby", prefix + "-" + activeTab);
+    panel.tabIndex = 0;
+    if (activeTab === "chat") chat(panel);
+    else if (activeTab === "review") proposals(panel);
+    else if (activeTab === "card") cardAndLore(panel);
+    else {
+      element(panel, "h3", "Workshop settings");
+      selectors(panel);
+      button(panel, "Save settings", () =>
+        run("settings", { presetId: preset, connectionId: connection }),
+      );
+    }
+  }
+  function chat(panel) {
+    const log = element(panel, "div");
     log.className = "vv-log";
     log.setAttribute("aria-label", "Workshop conversation");
     for (const message of session.messages) {
@@ -456,8 +581,7 @@ export function setup(ctx) {
       element(bubble, "p", message.content);
     }
     if (status === "Writing…") showStatus(log);
-    log.scrollTop = log.scrollHeight;
-    const composer = element(root, "div");
+    const composer = element(panel, "div");
     composer.className = "vv-composer";
     const input = element(composer, "textarea");
     input.className = "vv-input";
@@ -472,7 +596,7 @@ export function setup(ctx) {
   function disclosure(parent, id, title) {
     const details = element(parent, "details");
     details.dataset.section = id;
-    details.open = openSections.has(id);
+    details.open = openSections.get(activeTab)?.has(id) ?? false;
     element(details, "summary", title);
     return details;
   }
@@ -492,7 +616,8 @@ export function setup(ctx) {
     text.className = "vv-preview";
   }
   function cardAndLore(parent) {
-    const section = disclosure(parent, "overview", "Card & lore");
+    const section = parent;
+    element(section, "h3", "Card & lore");
     button(section, "Refresh from Lumiverse", () => run("refresh"));
     if (!overview) {
       element(section, "p", "The linked card is unavailable.");
@@ -543,15 +668,12 @@ export function setup(ctx) {
       displayValue(details, draft.value.key);
       element(details, "strong", "Entry text");
       displayValue(details, draft.value.content);
-      element(details, "p", "Apply this entry from Proposed changes.");
+      element(details, "p", "Apply this entry from the Review tab.");
     }
   }
   function proposals(parent) {
-    const review = disclosure(
-      parent,
-      "proposals",
-      "Proposed changes (" + session.pending.length + ")",
-    );
+    const review = parent;
+    element(review, "h3", "Proposed changes");
     if (!session.pending.length) {
       element(review, "p", "No pending changes. Ask the workshop to draft or revise a field.");
       return;
@@ -596,18 +718,22 @@ export function setup(ctx) {
     line.className = "vv-status";
     line.setAttribute("role", "status");
   }
-  function render() {
+  function render(followChat = false) {
     const scope = session?.id ?? "";
-    const sameSession = root.dataset.session === scope;
-    const controlsScroll = sameSession ? root.querySelector(".vv-controls")?.scrollTop ?? 0 : 0;
-    if (sameSession) {
-      openSections = new Set(
-        Array.from(root.querySelectorAll("details[data-section][open]"),
-          (details) => details.dataset.section),
-      );
-    } else {
+    const previous = root.querySelector(".vv-panel");
+    if (root.dataset.session !== scope) {
+      activeTab = "chat";
       openSections.clear();
+      scrollPositions.clear();
+    } else if (previous) {
+      const view = previous.dataset.view;
+      openSections.set(view, new Set(
+        Array.from(previous.querySelectorAll("details[data-section][open]"),
+          (details) => details.dataset.section),
+      ));
+      scrollPositions.set(view, (previous.querySelector(".vv-log") ?? previous).scrollTop);
     }
+    if (followChat) scrollPositions.delete("chat");
     root.dataset.session = scope;
     root.classList.toggle("vv-editor", Boolean(session));
     destroyComponents();
@@ -616,10 +742,14 @@ export function setup(ctx) {
       if (session) editor();
       else home();
     }
-    if (status && status !== "Writing…") showStatus(root);
+    if (status && (status !== "Writing…" || activeTab !== "chat")) showStatus(root);
     if (!library && !busy) button(root, "Reload workshop", () => run("home"));
-    const controls = root.querySelector(".vv-controls");
-    if (controls) controls.scrollTop = controlsScroll;
+    const panel = root.querySelector(".vv-panel");
+    const scroll = panel?.querySelector(".vv-log") ?? panel;
+    if (scroll) {
+      scroll.scrollTop = scrollPositions.get(activeTab) ??
+        (activeTab === "chat" ? scroll.scrollHeight : 0);
+    }
     fitEditor();
   }
   run("home");
