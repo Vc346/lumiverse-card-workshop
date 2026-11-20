@@ -35,6 +35,7 @@ Expand a linked lorebook to see its entries and activation keywords. To create a
 Run these commands from the extension directory after editing the sources. Commit the rebuilt bundles alongside the source to distribute an update.
 
 ```sh
+bun install --frozen-lockfile
 bun build src/backend.ts --target bun --outfile dist/backend.js
 bun build src/frontend.ts --target browser --outfile dist/frontend.js
 ```

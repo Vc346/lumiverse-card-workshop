@@ -1,3 +1,11 @@
+import MarkdownIt from "markdown-it";
+
+const markdown = new MarkdownIt({ html: false, breaks: true });
+markdown.validateLink = (url) => /^(https?:\/\/|mailto:)/i.test(url);
+// Show image descriptions without making requests to model-supplied URLs.
+markdown.renderer.rules.image = (tokens, index) =>
+  markdown.utils.escapeHtml(tokens[index].content);
+
 const fieldLabels = {
   name: "Name",
   description: "Description",
@@ -204,6 +212,33 @@ export function setup(ctx) {
     }
     .vv-author .vv-message strong { color: var(--vv-message-accent); font-size: .85em }
     .vv-author .vv-message p { line-height: 1.55 }
+    .vv-author .vv-markdown { min-width: 0; overflow-x: auto; line-height: 1.55 }
+    .vv-author .vv-markdown :is(p, li, pre) { white-space: normal }
+    .vv-author .vv-markdown > :first-child { margin-top: 0 }
+    .vv-author .vv-markdown > :last-child { margin-bottom: 0 }
+    .vv-author .vv-markdown > * + * { margin-top: .65em }
+    .vv-author .vv-markdown :is(ul, ol) { padding-inline-start: 1.35em }
+    .vv-author .vv-markdown :is(h1, h2, h3, h4, h5, h6) {
+      margin-bottom: .25em;
+      font-size: 1.05em;
+      font-weight: 700;
+    }
+    .vv-author .vv-markdown strong { color: inherit; font-size: inherit }
+    .vv-author .vv-markdown a { color: var(--lumiverse-accent); text-decoration: underline }
+    .vv-author .vv-markdown blockquote {
+      margin-inline: 0;
+      padding-inline-start: .75em;
+      border-inline-start: 2px solid var(--lumiverse-accent);
+    }
+    .vv-author .vv-markdown pre {
+      padding: .6em;
+      white-space: pre-wrap;
+      border-radius: 4px;
+      background: var(--lumiverse-fill-subtle);
+    }
+    .vv-author .vv-markdown code { font-family: ui-monospace, monospace }
+    .vv-author .vv-markdown table { border-collapse: collapse }
+    .vv-author .vv-markdown :is(th, td) { padding: .3em .5em; border: 1px solid var(--lumiverse-border) }
     .vv-author .vv-log .vv-status { padding-inline-start: 36px; font-size: .875em }
     .vv-author details > summary { cursor: pointer; font-weight: 600 }
     .vv-author .vv-preview {
@@ -589,7 +624,12 @@ export function setup(ctx) {
       const bubble = element(row, "div");
       bubble.className = "vv-bubble";
       element(bubble, "strong", isUser ? "You" : "Author");
-      element(bubble, "p", message.content);
+      if (isUser) {
+        element(bubble, "p", message.content);
+      } else {
+        const rendered = ctx.dom.inject(bubble, markdown.render(message.content));
+        rendered.classList.add("vv-markdown");
+      }
     }
     if (status === "Writing…") showStatus(log);
     const composer = element(panel, "div");
@@ -726,6 +766,9 @@ export function setup(ctx) {
     ])
       button(actions, label, () => run("review", { decision, ids: [...selected] }), decision === "apply");
   }
+  function clearMarkdown() {
+    for (const message of root.querySelectorAll(".vv-markdown")) ctx.dom.uninject(message);
+  }
   function showStatus(parent) {
     const line = element(parent, "p", status);
     line.className = "vv-status";
@@ -750,6 +793,7 @@ export function setup(ctx) {
     root.dataset.session = scope;
     root.classList.toggle("vv-editor", Boolean(session));
     destroyComponents();
+    clearMarkdown();
     root.replaceChildren();
     if (library) {
       if (session) editor();
@@ -777,6 +821,7 @@ export function setup(ctx) {
     window.cancelAnimationFrame(viewportFrame);
     for (const finish of waiting.values()) finish({ error: "Workshop closed" });
     destroyComponents();
+    clearMarkdown();
     removeStyle();
     tab.destroy();
   };
