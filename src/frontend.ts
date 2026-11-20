@@ -23,29 +23,118 @@ export function setup(ctx) {
   root.className = "vv-author";
   tab.root.appendChild(root);
   const removeStyle = ctx.dom.addStyle(`
-    .vv-author {padding:12px; display:grid; gap:12px; color:var(--lumiverse-text); font:inherit; overflow-wrap:anywhere}
-    .vv-author label,.vv-author details,.vv-author article {display:grid; gap:5px}
-    .vv-author button,.vv-author select,.vv-author textarea,.vv-author input:not([type=checkbox]) {font:inherit;color:inherit;background:var(--lumiverse-fill);border:1px solid var(--lumiverse-border);border-radius:var(--lumiverse-radius,8px);padding:8px;min-width:0;max-width:100%}
-    .vv-author select option {color:CanvasText;background:Canvas}
-    .vv-author button {cursor:pointer}
-    .vv-author button:disabled {opacity:.55}
-    .vv-author textarea {width:100%;box-sizing:border-box}
-    .vv-author p,.vv-author pre {margin:0;white-space:pre-wrap;font:inherit}
-    .vv-author.vv-editor {box-sizing:border-box;height:var(--vv-height,65vh);display:flex;flex-direction:column;overflow:auto}
-    .vv-author .vv-controls {max-height:42%;flex:none;overflow:auto;display:grid;gap:8px}
-    .vv-author .vv-controls:has([data-section="overview"][open]) {max-height:65%}
-    .vv-author .vv-preview {display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--lumiverse-text-muted);font-size:.88em}
-    .vv-author details[open] > summary > .vv-preview {display:none}
-    .vv-author h3 {margin:0}
-    .vv-author .vv-log {flex:1 1 auto;min-height:0;overflow:auto;display:grid;align-content:start;gap:10px}
-    .vv-author .vv-composer {flex:none;display:grid;gap:6px}
-    .vv-author .vv-composer textarea {font-size:max(16px,1em);resize:vertical}
-    .vv-author .vv-proposal {display:grid;grid-template-columns:auto minmax(0,1fr);align-items:start;gap:6px}
-    .vv-author details > summary {cursor:pointer}
-    .vv-author details[open] > summary {margin-bottom:6px}
-    .vv-author article,.vv-author details {border:1px solid var(--lumiverse-border);padding:10px;border-radius:8px}
-    .vv-author .vv-actions {display:flex;gap:6px;flex-wrap:wrap}
-    .vv-author .vv-status {color:var(--lumiverse-text-muted)}
+    .vv-author {
+      box-sizing: border-box;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      width: 100%;
+      min-width: 0;
+      max-width: 100%;
+      gap: 12px;
+      padding: 12px;
+      color: var(--lumiverse-text);
+      font: inherit;
+      overflow-wrap: anywhere;
+    }
+    .vv-author :where(.vv-controls, .vv-log, .vv-composer, .vv-picker, article, details, summary) {
+      min-width: 0;
+      max-width: 100%;
+      box-sizing: border-box;
+    }
+    .vv-author :where(.vv-field, .vv-picker, .vv-controls, .vv-log, article, details[open]) {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 8px;
+    }
+    .vv-author :where(.vv-button, .vv-input) {
+      box-sizing: border-box;
+      min-width: 0;
+      max-width: 100%;
+      min-height: 40px;
+      padding: 8px 12px;
+      border: 1px solid var(--lumiverse-border);
+      border-radius: var(--lumiverse-radius, 8px);
+      background: var(--lumiverse-fill-subtle);
+      color: inherit;
+      font: inherit;
+    }
+    .vv-author .vv-button { cursor: pointer; font-weight: 600 }
+    .vv-author .vv-button:disabled { opacity: .55; cursor: default }
+    .vv-author .vv-primary {
+      background: var(--lumiverse-accent, #8c70c7);
+      color: var(--lumiverse-accent-fg, #fff);
+      border-color: transparent;
+    }
+    .vv-author :where(.vv-button, .vv-input, summary):focus-visible {
+      outline: 2px solid var(--lumiverse-accent, #8c70c7);
+      outline-offset: -2px;
+    }
+    .vv-author select option { color: CanvasText; background: Canvas }
+    .vv-author :where(p, pre) { margin: 0; white-space: pre-wrap; font: inherit }
+    .vv-author h3 { margin: 0 }
+    .vv-author.vv-editor {
+      height: var(--vv-height, 65vh);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden auto;
+    }
+    .vv-author .vv-heading { display: flex; align-items: center; gap: 12px }
+    .vv-author .vv-heading h3 { min-width: 0 }
+    .vv-author .vv-controls {
+      flex: none;
+      max-height: 46%;
+      overflow: hidden auto;
+      align-content: start;
+    }
+    .vv-author .vv-controls:has(> details[open]) { max-height: 65% }
+    .vv-author .vv-log {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow: hidden auto;
+      align-content: start;
+      padding-inline: 2px;
+    }
+    .vv-author :where(article, details) {
+      padding: 10px;
+      border: 1px solid var(--lumiverse-border);
+      border-radius: var(--lumiverse-radius, 8px);
+      background: var(--lumiverse-fill-subtle);
+    }
+    .vv-author article[data-role="assistant"] {
+      border-inline-start: 3px solid var(--lumiverse-accent);
+    }
+    .vv-author details > summary { cursor: pointer; font-weight: 600 }
+    .vv-author .vv-preview {
+      display: block;
+      min-width: 0;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--lumiverse-text-muted);
+      font-size: .88em;
+      font-weight: 400;
+    }
+    .vv-author details[open] > summary > .vv-preview { display: none }
+    .vv-author .vv-composer {
+      flex: none;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: end;
+      gap: 8px;
+      padding-top: 8px;
+      border-top: 1px solid var(--lumiverse-border);
+    }
+    .vv-author .vv-composer textarea { width: 100%; font-size: max(16px, 1em); resize: none }
+    .vv-author .vv-proposal {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      align-items: start;
+      gap: 8px;
+    }
+    .vv-author .vv-proposal input { margin: 12px 4px; accent-color: var(--lumiverse-accent) }
+    .vv-author .vv-actions { display: flex; gap: 8px; flex-wrap: wrap }
+    .vv-author .vv-status { color: var(--lumiverse-text-muted) }
   `);
   let library,
     sessions = [],
@@ -60,6 +149,10 @@ export function setup(ctx) {
     setupKind = "character",
     preset = "",
     connection = "";
+  const components = [];
+  function destroyComponents() {
+    for (const component of components.splice(0)) component.destroy();
+  }
   let selected = new Set();
   let openSections = new Set();
   let viewportFrame = 0;
@@ -164,15 +257,39 @@ export function setup(ctx) {
     parent.appendChild(el);
     return el;
   }
-  function button(parent, label, fn) {
+  function button(parent, label, fn, primary = false) {
     const b = element(parent, "button", label);
+    b.className = primary ? "vv-button vv-primary" : "vv-button";
     b.type = "button";
     b.disabled = busy;
     b.onclick = fn;
     return b;
   }
   function select(parent, label, options, current, onChange) {
-    const input = element(element(parent, "label", label), "select");
+    if (ctx.components?.mountSelect) {
+      const picker = element(parent, "div");
+      picker.className = "vv-picker";
+      element(picker, "span", label);
+      const fallback = options.find(({ id }) => id === "");
+      components.push(ctx.components.mountSelect(element(picker, "div"), {
+        ariaLabel: label,
+        value: current,
+        options: options.filter(({ id }) => id !== "").map(({ id, name }) => ({
+          value: id,
+          label: name,
+        })),
+        placeholder: fallback?.name ?? label,
+        clearable: Boolean(fallback),
+        clearLabel: fallback?.name,
+        disabled: busy,
+        onChange,
+      }));
+      return;
+    }
+    const field = element(parent, "label", label);
+    field.className = "vv-field";
+    const input = element(field, "select");
+    input.className = "vv-input";
     for (const { id, name } of options)
       element(input, "option", name).value = id;
     input.value = current;
@@ -208,11 +325,14 @@ export function setup(ctx) {
       setupCard,
       (v) => {
         setupCard = v;
-        render();
+        queueMicrotask(render);
       },
     );
     if (!setupCard) {
-      const input = element(element(root, "label", "Card name"), "input");
+      const label = element(root, "label", "Card name");
+      label.className = "vv-field";
+      const input = element(label, "input");
+      input.className = "vv-input";
       input.value = setupTitle;
       input.oninput = () => (setupTitle = input.value);
     }
@@ -235,12 +355,15 @@ export function setup(ctx) {
         presetId: preset,
         connectionId: connection,
       }),
+      true,
     );
   }
   function editor() {
     const controls = element(root, "div");
     controls.className = "vv-controls";
-    button(controls, "← Workshops", () => {
+    const heading = element(controls, "div");
+    heading.className = "vv-heading";
+    button(heading, "← Workshops", () => {
       session = null;
       draft = "";
       preset = "";
@@ -248,7 +371,7 @@ export function setup(ctx) {
       selected.clear();
       run("home");
     });
-    element(controls, "h3", session.title);
+    element(heading, "h3", session.title);
     const settings = disclosure(controls, "settings", "Workshop settings");
     selectors(settings);
     button(settings, "Save settings", () =>
@@ -260,21 +383,22 @@ export function setup(ctx) {
     log.className = "vv-log";
     for (const message of session.messages) {
       const row = element(log, "article");
+      row.dataset.role = message.role;
       element(row, "strong", message.role === "user" ? "You" : "Author");
       element(row, "p", message.content);
     }
     log.scrollTop = log.scrollHeight;
     const composer = element(root, "div");
     composer.className = "vv-composer";
-    const input = element(
-      element(composer, "label", "Workshop message"),
-      "textarea",
-    );
-    input.rows = 3;
+    const label = element(composer, "label", "Workshop message");
+    label.className = "vv-field";
+    const input = element(label, "textarea");
+    input.className = "vv-input";
+    input.rows = 2;
     input.value = draft;
     input.disabled = busy;
     input.oninput = () => (draft = input.value);
-    button(composer, "Send", () => run("talk", { text: draft }));
+    button(composer, "Send", () => run("talk", { text: draft }), true);
   }
   function disclosure(parent, id, title) {
     const details = element(parent, "details");
@@ -293,7 +417,9 @@ export function setup(ctx) {
   }
   function preview(details, value) {
     if (!value) return;
-    const text = element(details.querySelector("summary"), "span", value);
+    const characters = Array.from(value.slice(0, 200));
+    const snippet = characters.length > 96 ? characters.slice(0, 96).join("") + "…" : value;
+    const text = element(details.querySelector("summary"), "span", snippet);
     text.className = "vv-preview";
   }
   function cardAndLore(parent) {
@@ -394,9 +520,7 @@ export function setup(ctx) {
       ["apply", "Apply selected"],
       ["discard", "Discard selected"],
     ])
-      button(actions, label, () =>
-        run("review", { decision, ids: [...selected] }),
-      );
+      button(actions, label, () => run("review", { decision, ids: [...selected] }), decision === "apply");
   }
   function render() {
     const scope = session?.id ?? "";
@@ -412,6 +536,7 @@ export function setup(ctx) {
     }
     root.dataset.session = scope;
     root.classList.toggle("vv-editor", Boolean(session));
+    destroyComponents();
     root.replaceChildren();
     if (library) {
       if (session) editor();
@@ -438,6 +563,7 @@ export function setup(ctx) {
     root.removeEventListener("focusin", fitEditor);
     window.cancelAnimationFrame(viewportFrame);
     for (const finish of waiting.values()) finish({ error: "Workshop closed" });
+    destroyComponents();
     removeStyle();
     tab.destroy();
   };
