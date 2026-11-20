@@ -217,6 +217,17 @@ function setup(ctx) {
       font-weight: 400;
     }
     .vv-author details[open] > summary > .vv-preview { display: none }
+    .vv-author .vv-value {
+      min-width: 0;
+      padding: 10px 12px;
+      border: 1px solid var(--lumiverse-border);
+      border-radius: 4px;
+      background: var(--lumiverse-fill);
+      background: color-mix(in srgb, var(--lumiverse-accent, #8c70c7) 10%, var(--lumiverse-fill-subtle, transparent));
+      line-height: 1.55;
+    }
+    .vv-author .vv-value ol { margin: 0; padding-inline-start: 1.35em }
+    .vv-author .vv-value li + li { margin-block-start: 8px }
     .vv-author .vv-composer {
       flex: none;
       display: grid;
@@ -571,12 +582,14 @@ function setup(ctx) {
     return details;
   }
   function displayValue(parent, value) {
+    const panel = element(parent, "div");
+    panel.className = "vv-value";
     if (Array.isArray(value) && value.length) {
-      const list = element(parent, "ol");
+      const list = element(panel, "ol");
       for (const item of value)
         element(element(list, "li"), "p", item);
     } else {
-      element(parent, "p", value?.length ? value : "(empty)");
+      element(panel, "p", value?.length ? value : "(empty)");
     }
   }
   function preview(details, value) {
