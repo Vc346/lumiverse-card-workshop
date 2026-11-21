@@ -52,7 +52,7 @@ function fixture() {
     generate: {
       quiet: async (request) => {
         calls.push(request);
-        return { content: JSON.stringify(answer) };
+        return { content: typeof answer === "string" ? answer : JSON.stringify(answer) };
       },
     },
     userStorage: {
@@ -214,4 +214,32 @@ test("alternate greetings preserve order and detect edits made after a proposal"
   card.alternate_greetings = [...value].reverse();
   await expect(apply(revised)).rejects.toThrow("changed since proposal");
   expect(card.alternate_greetings).toEqual([...value].reverse());
+});
+
+test("fenced proposals with surrounding prose reach Review without exposing JSON", async () => {
+  const f = fixture();
+  const run = workshop(f.host);
+  const { session } = await run("alice", { action: "start", title: "Slipway" });
+  const entry = { comment: "Tides and Weather", key: ["tide"], content: "The tide turns fast." };
+  const change = { target: "new_lore", field: "entry", value: entry };
+  const talk = (s) => run("alice", { action: "talk", id: s.id, rev: s.rev, text: "Draft a lore entry." });
+  const fence = String.fromCharCode(96).repeat(3);
+  f.respond("Here’s what I’d add.\n\n" + fence + "json\n" +
+    JSON.stringify({ reply: "The tide makes a good clock for the scene.", changes: [change] }) +
+    "\n" + fence + "\n\nWe can narrow the keyword later.");
+  const { session: proposed } = await talk(session);
+  expect(proposed.pending[0].value).toEqual(entry);
+  expect(proposed.messages.at(-1).content).toBe(
+    "Here’s what I’d add.\n\nThe tide makes a good clock for the scene.\n\nWe can narrow the keyword later.",
+  );
+  f.respond("One more entry.\n" + fence + 'json\n{"changes": [\n' + fence);
+  await expect(talk(proposed)).rejects.toThrow("invalid proposal JSON");
+  const { session: reopened } = await run("alice", { action: "open", id: session.id });
+  expect(reopened.pending).toEqual(proposed.pending);
+  expect(reopened.messages).toEqual(proposed.messages);
+  await run("alice", {
+    action: "review", id: reopened.id, rev: reopened.rev,
+    decision: "apply", ids: [reopened.pending[0].id],
+  });
+  expect(f.entries[0].content).toBe(entry.content);
 });

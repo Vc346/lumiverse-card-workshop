@@ -70,6 +70,35 @@ function string(value, label, max = 1e5) {
   check(typeof value === "string" && value.length <= max, "Invalid " + label);
   return value;
 }
+function readReply(content) {
+  const error = "Murasaki returned invalid proposal JSON. No changes were added to Review. Try sending your message again.";
+  const fences = /^ {0,3}(\x60{3,}|~{3,})(?![\x60~])([^\r\n]*)\r?\n([\s\S]*?)(?:^ {0,3}\1[ \t]*(?=\r?$)|(?![\s\S]))/gm;
+  let payload = content;
+  let before = "";
+  let after = "";
+  if (!content.startsWith("{")) {
+    const candidates = [...content.matchAll(fences)].filter(([, , language, body]) => /^(?:json)?$/i.test(language.trim()) && /^\s*\{[\s\S]*?"(?:reply|changes)"\s*:/.test(body));
+    if (!candidates.length)
+      return { reply: content, changes: [] };
+    check(candidates.length === 1, "Murasaki returned multiple proposal blocks. No changes were added to Review.");
+    const [block, , , body] = candidates[0];
+    payload = body;
+    before = content.slice(0, candidates[0].index).trim();
+    after = content.slice(candidates[0].index + block.length).trim();
+  }
+  let answer;
+  try {
+    answer = JSON.parse(payload);
+  } catch {
+    throw new Error(error);
+  }
+  check(Array.isArray(answer?.changes) && (typeof answer.reply === "string" || answer.reply == null && (before || after)), error);
+  const reply = [...new Set([before, answer.reply?.trim(), after].filter(Boolean))].join(`
+
+`);
+  check(reply, error);
+  return { reply, changes: answer.changes };
+}
 async function pages(fetchPage) {
   const result = [];
   while (true) {
@@ -274,10 +303,11 @@ function workshop(host) {
       });
       const content = string(result.content, "model response", 500000).trim();
       check(content, "The model returned an empty reply.");
-      const clean = content.replace(/^\x60\x60\x60(?:json)?\s*/i, "").replace(/\s*\x60\x60\x60$/, "");
-      const answer = clean.startsWith("{") ? JSON.parse(clean) : { reply: content, changes: [] };
-      check(typeof answer.reply === "string" && answer.reply.trim() && Array.isArray(answer.changes), "The model returned an invalid workshop response.");
-      const proposed = answer.changes.map((c) => proposal(c, ctx));
+      const answer = readReply(content);
+      const proposed = answer.changes.map((change) => {
+        check(change && typeof change === "object", "Invalid proposal. No changes were added to Review.");
+        return proposal(change, ctx);
+      });
       for (const p of proposed) {
         const i = s.pending.findIndex((old) => old.id === p.id);
         if (i < 0)

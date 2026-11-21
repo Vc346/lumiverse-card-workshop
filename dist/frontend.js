@@ -5303,6 +5303,17 @@ var fieldLabels = {
   summary_prompt: "Summary prompt",
   ledger_prompt: "Ledger prompt"
 };
+var loreFieldLabels = { content: "Entry text", comment: "Entry title", key: "Activation keywords" };
+function proposalLabel(proposal) {
+  if (proposal.target === "card" || proposal.target === "template")
+    return fieldLabels[proposal.field] ?? proposal.label;
+  if (proposal.target === "lore" && loreFieldLabels[proposal.field]) {
+    const suffix = " · " + proposal.field;
+    if (proposal.label.endsWith(suffix))
+      return proposal.label.slice(0, -suffix.length) + " · " + loreFieldLabels[proposal.field];
+  }
+  return proposal.label;
+}
 var tabs = [
   { id: "chat", label: "Chat", icon: "M3 4h18v12H8l-5 4V4z" },
   { id: "review", label: "Review", icon: "M6 3h12v18H6z M9 12l2 2 4-5" },
@@ -5986,15 +5997,16 @@ function setup(ctx) {
     if (!session.cardId)
       element(review, "p", "Applying your first selection creates this card in the library.");
     for (const p of session.pending) {
+      const label = proposalLabel(p);
       const row = element(review, "div");
       row.className = "vv-proposal";
       const box = element(row, "input");
       box.type = "checkbox";
-      box.setAttribute("aria-label", "Select " + p.label);
+      box.setAttribute("aria-label", "Select " + label);
       box.checked = selected.has(p.id);
       box.disabled = busy;
       box.onchange = () => box.checked ? selected.add(p.id) : selected.delete(p.id);
-      const details = disclosure(row, "proposal:" + p.id, p.label);
+      const details = disclosure(row, "proposal:" + p.id, label);
       if (p.before !== null) {
         element(details, "strong", "Current value");
         displayValue(details, p.before);
