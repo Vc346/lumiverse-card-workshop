@@ -1,4 +1,5 @@
 import MarkdownIt from "markdown-it";
+import { createSummarySync } from "./summary-sync";
 
 const markdown = new MarkdownIt({ html: false, breaks: true });
 markdown.validateLink = (url) => /^(https?:\/\/|mailto:)/i.test(url);
@@ -39,13 +40,13 @@ const tabs = [
   { id: "chat", label: "Chat", icon: "M3 4h18v12H8l-5 4V4z" },
   { id: "review", label: "Review", icon: "M6 3h12v18H6z M9 12l2 2 4-5" },
   { id: "card", label: "Card & lore", icon: "M3 5h7l2 2h9v12H3z M7 12h10 M7 15h7" },
-  { id: "settings", label: "Workshop settings", icon: "M4 6h16 M4 12h16 M4 18h16 M8 4v4 M16 10v4 M10 16v4" },
+  { id: "settings", label: "Forge settings", icon: "M4 6h16 M4 12h16 M4 18h16 M8 4v4 M16 10v4 M10 16v4" },
 ];
 
 export function setup(ctx) {
   const tab = ctx.ui.registerDrawerTab({
     id: "card-workshop",
-    title: "Card Workshop",
+    title: "Card Forge",
   });
   const root = document.createElement("section");
   root.className = "vv-author";
@@ -116,6 +117,18 @@ export function setup(ctx) {
       padding-bottom: 6px;
       border-bottom: 1px solid var(--lumiverse-border);
     }
+    .vv-author .vv-home-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .vv-author .vv-home-heading .vv-primary {
+      color: var(--lumiverse-accent-fg, #fff);
+      background: var(--lumiverse-accent, #8c70c7);
+    }
+    .vv-author.vv-creation-form { padding: 0 }
+    .vv-author .vv-field[hidden] { display: none }
     .vv-author .vv-heading h3 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
     .vv-author .vv-tabs { display: flex; gap: 2px }
     .vv-author .vv-icon-button {
@@ -319,6 +332,21 @@ export function setup(ctx) {
     setupKind = "character",
     preset = "",
     connection = "";
+  let creationModal = null;
+  let summaryModal = null;
+  const summarySync = ctx.settings?.get && ctx.events?.on
+    ? createSummarySync(ctx.settings)
+    : null;
+  function reportSummaryError(error) {
+    console.warn("[Card Forge] Could not sync the Loom summary prompt.", error);
+  }
+  const stopSummarySwitch = summarySync
+    ? ctx.events.on("CHAT_SWITCHED", ({ chatId } = {}) => {
+        if (typeof chatId === "string" || chatId === null)
+          summarySync.follow(chatId).catch(reportSummaryError);
+      })
+    : null;
+  summarySync?.follow().catch(reportSummaryError);
   const components = [];
   function destroyComponents() {
     for (const component of components.splice(0)) component.destroy();
@@ -365,7 +393,7 @@ export function setup(ctx) {
         () =>
           finish({
             error:
-              "Request timed out. Reopen the workshop to check its saved state.",
+              "Request timed out. Reopen the forge to check its saved state.",
           }),
         300000,
       );
@@ -396,6 +424,8 @@ export function setup(ctx) {
         ...args,
       });
       if (data.overview !== undefined) overview = data.overview;
+      if (action === "review" && args.decision === "apply")
+        summarySync?.follow().catch(reportSummaryError);
       if (data.catalog) library = data.catalog;
       if (data.sessions) sessions = data.sessions;
       if (data.session) {
@@ -416,6 +446,7 @@ export function setup(ctx) {
           const data = await rpc({ action: "open", id: session.id });
           session = data.session;
           overview = data.overview;
+          if (args.decision === "apply") summarySync?.follow().catch(reportSummaryError);
         } catch {}
       }
     } finally {
@@ -445,6 +476,8 @@ export function setup(ctx) {
       const fallback = options.find(({ id }) => id === "");
       components.push(ctx.components.mountSelect(element(picker, "div"), {
         ariaLabel: label,
+        // Keep the dropdown above the modal backdrop by rendering inside it.
+        portal: !parent.closest(".vv-creation-form"),
         value: current,
         options: options.filter(({ id }) => id !== "").map(({ id, name }) => ({
           value: id,
@@ -486,49 +519,151 @@ export function setup(ctx) {
     );
   }
   function home() {
-    element(root, "h3", "Workshops");
+    const heading = element(root, "div");
+    heading.className = "vv-home-heading";
+    element(heading, "h3", "Forges");
+    const actions = element(heading, "div");
+    actions.className = "vv-actions";
+    if (summarySync) {
+      const summaries = iconButton(actions, "Loom summary prompts",
+        "M5 3h14v18H5z M8 8h8 M8 12h8 M8 16h5", openSummarySettings);
+      summaries.setAttribute("aria-haspopup", "dialog");
+    }
+    const create = iconButton(actions, "New forge", "M12 5v14 M5 12h14", openCreation);
+    create.classList.add("vv-primary");
+    create.setAttribute("aria-haspopup", "dialog");
     for (const item of sessions)
       button(root, item.title, () => run("open", { id: item.id }));
-    element(root, "h3", "Start a workshop");
+    if (!sessions.length) element(root, "p", "No forges yet.");
+  }
+  async function openSummarySettings() {
+    if (!summarySync || summaryModal) return;
+    const modal = ctx.ui.showModal({ title: "Loom summary prompts" });
+    summaryModal = modal;
+    modal.onDismiss(() => {
+      summaryModal = null;
+      if (alive) root.querySelector('[aria-label="Loom summary prompts"]')?.focus();
+    });
+    const form = element(modal.root, "form");
+    form.className = "vv-author vv-creation-form";
+    form.setAttribute("aria-label", "Loom summary prompts");
+    const toggleLabel = element(form, "label", " Switch Loom prompts when I change chats");
+    const enabled = document.createElement("input");
+    enabled.type = "checkbox";
+    toggleLabel.prepend(enabled);
+    const fallbackLabel = element(form, "label", "Generic summary prompt");
+    fallbackLabel.className = "vv-field";
+    const fallback = element(fallbackLabel, "textarea");
+    fallback.className = "vv-input";
+    fallback.rows = 5;
+    fallback.maxLength = 100000;
+    element(form, "p", "Used when a card has no summary prompt. Leave blank to use Loom’s default. Loom shares one override across tabs.");
+    const feedback = element(form, "p", "Loading…");
+    feedback.className = "vv-status";
+    feedback.setAttribute("role", "status");
+    const actions = element(form, "div");
+    actions.className = "vv-actions";
+    const cancel = button(actions, "Cancel", () => modal.dismiss());
+    const submit = button(actions, "Save", null, true);
+    submit.type = "submit";
+    enabled.disabled = fallback.disabled = submit.disabled = true;
+    try {
+      const config = await summarySync.load();
+      if (summaryModal !== modal) return;
+      enabled.checked = config.enabled;
+      fallback.value = config.fallback;
+      feedback.textContent = "";
+      enabled.disabled = fallback.disabled = submit.disabled = false;
+    } catch {
+      feedback.textContent = "Could not load summary settings. Close and try again.";
+      return;
+    }
+    form.onsubmit = async (event) => {
+      event.preventDefault();
+      enabled.disabled = fallback.disabled = cancel.disabled = submit.disabled = true;
+      feedback.textContent = "Saving…";
+      try {
+        await summarySync.save(enabled.checked, fallback.value);
+        if (summaryModal === modal) modal.dismiss();
+      } catch (error) {
+        reportSummaryError(error);
+        feedback.textContent = "Could not finish syncing with Loom. Try saving again.";
+        enabled.disabled = fallback.disabled = cancel.disabled = submit.disabled = false;
+      }
+    };
+  }
+  function openCreation() {
+    if (creationModal || busy) return;
+    status = "";
+    setupCard = "";
+    setupTitle = "";
+    setupKind = "character";
+    preset = "";
+    connection = "";
+    const modal = ctx.ui.showModal({ title: "New forge" });
+    creationModal = modal;
+    modal.onDismiss(() => {
+      creationModal = null;
+      // The host destroys mounts under the modal root before this callback.
+      components.length = 0;
+      if (alive && !session) root.querySelector('[aria-label="New forge"]')?.focus();
+    });
+    renderCreation().focus();
+  }
+  function renderCreation() {
+    const modal = creationModal;
+    modal.root.replaceChildren();
+    const form = element(modal.root, "form");
+    form.className = "vv-author vv-creation-form";
+    form.tabIndex = -1;
+    form.setAttribute("aria-label", "Create forge");
     select(
-      root,
+      form,
       "Card",
       [option("", "New card"), ...library.cards],
       setupCard,
-      (v) => {
-        setupCard = v;
-        queueMicrotask(render);
+      (value) => {
+        setupCard = value;
+        nameLabel.hidden = Boolean(value);
+        input.required = !value;
+        input.disabled = busy || Boolean(value);
       },
     );
-    if (!setupCard) {
-      const label = element(root, "label", "Card name");
-      label.className = "vv-field";
-      const input = element(label, "input");
-      input.className = "vv-input";
-      input.value = setupTitle;
-      input.oninput = () => (setupTitle = input.value);
-    }
+    const nameLabel = element(form, "label", "Card name");
+    nameLabel.className = "vv-field";
+    nameLabel.hidden = Boolean(setupCard);
+    const input = element(nameLabel, "input");
+    input.className = "vv-input";
+    input.required = !setupCard;
+    input.disabled = busy || Boolean(setupCard);
+    input.maxLength = 200;
+    input.value = setupTitle;
+    input.oninput = () => (setupTitle = input.value);
     select(
-      root,
-      "Workshop type",
-      [
-        option("character", "Character"),
-        option("scenario", "Scenario"),
-      ],
+      form,
+      "Forge type",
+      [option("character", "Character"), option("scenario", "Scenario")],
       setupKind,
-      (v) => (setupKind = v),
+      (value) => (setupKind = value),
     );
-    selectors(root);
-    button(root, "Start workshop", () =>
+    selectors(form);
+    if (status) showStatus(form);
+    const actions = element(form, "div");
+    actions.className = "vv-actions";
+    button(actions, "Cancel", () => modal.dismiss());
+    const submit = button(actions, "Create forge", null, true);
+    submit.type = "submit";
+    form.onsubmit = (event) => {
+      event.preventDefault();
       run("start", {
         title: setupTitle,
         kind: setupKind,
         cardId: setupCard,
         presetId: preset,
         connectionId: connection,
-      }),
-      true,
-    );
+      });
+    };
+    return form;
   }
   function iconButton(parent, label, path, onClick) {
     const control = button(parent, "", onClick);
@@ -561,7 +696,7 @@ export function setup(ctx) {
   function editor() {
     const heading = element(root, "div");
     heading.className = "vv-heading";
-    iconButton(heading, "Back to workshops", "M19 12H5 M11 6l-6 6 6 6", () => {
+    iconButton(heading, "Back to forges", "M19 12H5 M11 6l-6 6 6 6", () => {
       session = null;
       draft = "";
       preset = "";
@@ -574,7 +709,7 @@ export function setup(ctx) {
     const tablist = element(heading, "div");
     tablist.className = "vv-tabs";
     tablist.setAttribute("role", "tablist");
-    tablist.setAttribute("aria-label", "Workshop views");
+    tablist.setAttribute("aria-label", "Forge views");
     const prefix = "vv-workshop-" + session.id;
     const panelId = prefix + "-panel";
     tabs.forEach(({ id, label, icon }, index) => {
@@ -615,7 +750,7 @@ export function setup(ctx) {
     else if (activeTab === "review") proposals(panel);
     else if (activeTab === "card") cardAndLore(panel);
     else {
-      element(panel, "h3", "Workshop settings");
+      element(panel, "h3", "Forge settings");
       selectors(panel);
       button(panel, "Save settings", () =>
         run("settings", { presetId: preset, connectionId: connection }),
@@ -625,7 +760,7 @@ export function setup(ctx) {
   function chat(panel) {
     const log = element(panel, "div");
     log.className = "vv-log";
-    log.setAttribute("aria-label", "Workshop conversation");
+    log.setAttribute("aria-label", "Forge conversation");
     for (const message of session.messages) {
       const row = element(log, "article");
       row.className = "vv-message";
@@ -649,7 +784,7 @@ export function setup(ctx) {
     composer.className = "vv-composer";
     const input = element(composer, "textarea");
     input.className = "vv-input";
-    input.setAttribute("aria-label", "Workshop message");
+    input.setAttribute("aria-label", "Message Murasaki");
     input.placeholder = "Message Murasaki…";
     input.rows = 2;
     input.value = draft;
@@ -693,7 +828,7 @@ export function setup(ctx) {
     const pending = new Set(session.pending.map((p) => p.id));
     for (const [target, label, fields] of [
       ["card", "Card fields", card],
-      ["template", "Workshop prompts", templates],
+      ["template", "Forge prompts", templates],
     ]) {
       element(section, "strong", label);
       for (const [field, value] of Object.entries(fields)) {
@@ -712,7 +847,7 @@ export function setup(ctx) {
     element(section, "strong", "Lorebooks");
     const drafts = session.pending.filter((p) => p.target === "new_lore");
     if (!books.length)
-      element(section, "p", "No linked lorebooks. Ask the workshop to draft an entry to start one.");
+      element(section, "p", "No linked lorebooks. Ask Murasaki to draft an entry to start one.");
     for (const book of books) {
       const group = disclosure(section, "book:" + book.id, book.name + " (" + book.entries.length + ")");
       if (!book.entries.length) element(group, "p", "No saved entries.");
@@ -741,7 +876,7 @@ export function setup(ctx) {
     const review = parent;
     element(review, "h3", "Proposed changes");
     if (!session.pending.length) {
-      element(review, "p", "No pending changes. Ask the workshop to draft or revise a field.");
+      element(review, "p", "No pending changes. Ask Murasaki to draft or revise a field.");
       return;
     }
     if (!session.cardId)
@@ -810,11 +945,17 @@ export function setup(ctx) {
     clearMarkdown();
     root.replaceChildren();
     if (library) {
-      if (session) editor();
-      else home();
+      if (session) {
+        creationModal?.dismiss();
+        editor();
+      } else {
+        home();
+        if (creationModal) renderCreation();
+      }
     }
-    if (status && (status !== "Writing…" || activeTab !== "chat")) showStatus(root);
-    if (!library && !busy) button(root, "Reload workshop", () => run("home"));
+    if (!creationModal && status && (status !== "Writing…" || activeTab !== "chat"))
+      showStatus(root);
+    if (!library && !busy) button(root, "Reload Card Forge", () => run("home"));
     const panel = root.querySelector(".vv-panel");
     const scroll = panel?.querySelector(".vv-log") ?? panel;
     if (scroll) {
@@ -827,15 +968,19 @@ export function setup(ctx) {
   return () => {
     alive = false;
     unsubscribe();
+    stopSummarySwitch?.();
+    summarySync?.dispose();
     resize.disconnect();
     viewport?.removeEventListener("resize", fitEditor);
     viewport?.removeEventListener("scroll", fitEditor);
     window.removeEventListener("resize", fitEditor);
     root.removeEventListener("focusin", fitEditor);
     window.cancelAnimationFrame(viewportFrame);
-    for (const finish of waiting.values()) finish({ error: "Workshop closed" });
+    for (const finish of waiting.values()) finish({ error: "Forge closed" });
     destroyComponents();
     clearMarkdown();
+    creationModal?.dismiss();
+    summaryModal?.dismiss();
     removeStyle();
     tab.destroy();
   };

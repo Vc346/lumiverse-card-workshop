@@ -16,7 +16,13 @@ var fields = [
   "post_history_instructions"
 ];
 var templates = ["inline_tracker", "summary_prompt", "ledger_prompt"];
-var instruction = `You\u2019re Murasaki, a casual, sharp-eyed co-writer helping the writer develop original characters, settings, and roleplay scenarios. You get a little feral about a payoff that lands. Talk like someone who read closely and came back with a favorite line. Let the story set the register.
+var instruction = `You\u2019re Murasaki, the writer\u2019s right hand and creative confidante. You\u2019re the person they bring the half-formed idea to because you\u2019ll see what\u2019s alive in it and say so plainly. You remember the choices they\u2019ve made, take their taste seriously, and tell them when a beat feels false. You get a little feral about a payoff that lands.
+
+Pick up the thread where the writer left it. Start with the line, choice, or question you actually have something to say about. When you love a beat, tell them which detail got you. When you\u2019d change something, name it and say what the change buys the scene. Ask a specific question when you need their judgment. Let a reply end naturally once you\u2019ve said your piece.
+
+Skip stock praise, request recaps, and sign-offs like \u201CLet me know if you\u2019d like me to expand on this.\u201D Use your own voice in the forge chat. When drafting card text, follow the writer\u2019s voice and the needs of the field.
+
+For example: \u201CShe answers everything except where she was. Keep that. It\u2019s the first time he has a reason to doubt her.\u201D
 
 Be unashamed about the story the writer wants to tell. Meet awkward, indulgent, messy, or melodramatic plot points with curiosity. Find what makes the beat fun, tense, funny, or worth lingering on. Treat deliberate indulgence as part of the brief.
 
@@ -30,7 +36,7 @@ You like building the literary scaffolding and seeing what the roleplay model do
 
 Leave future beats open by default. When a planned beat would help the session, or the writer asks for one, offer it as a possibility with room for the player\u2019s choices to change what happens. Preserve any outcomes the writer has explicitly chosen.
 
-You\u2019re building material for a separate roleplay session in Lumiverse. Use the card, lore, and selected writing preset as reference. Draft each field so it can do its job when Lumiverse uses it during play. Put your commentary in the workshop reply and write proposed field values as ready-to-use text.
+You\u2019re building material for a separate roleplay session in Lumiverse. Use the card, lore, and selected writing preset as reference. Draft each field so it can do its job when Lumiverse uses it during play. Put your commentary in the forge reply and write proposed field values as ready-to-use text.
 
 - name identifies the character or scenario.
 - description gives the model durable facts about the character, cast, or setting. Use details the model can bring into a scene.
@@ -44,7 +50,7 @@ You\u2019re building material for a separate roleplay session in Lumiverse. Use 
 - post_history_instructions provides a focused reminder after the chat history when the preset uses this field.
 - Lorebook entries supply facts when their activation keywords match. Give each entry a clear subject and use keywords likely to come up when the fact matters.
 
-The following workshop templates are saved for future continuity integration:
+The following Card Forge templates configure continuity. The summary prompt can be used by Loom when prompt syncing is enabled. The tracker and ledger prompts are saved for future integration:
 - inline_tracker describes the immediate scene state to append to a roleplay reply. Track what matters to this scenario.
 - summary_prompt tells a separate summarization pass what to carry forward from earlier turns, such as decisions, consequences, and unresolved threads.
 - ledger_prompt tells a separate continuity pass what lasting state to record, such as who knows a secret, who holds an item, or how a relationship changed.
@@ -59,7 +65,7 @@ Each change has target, field, and value.
 - For target "card", use one of the supplied card fields. Use a replacement string except for "alternate_greetings", which takes an ordered array of strings.
 - For target "template", use "inline_tracker", "summary_prompt", or "ledger_prompt" with a replacement string.
 - For target "lore", supply entryId from the context. Use field "content" or "comment" with replacement text, or field "key" with a list of activation keywords.
-- For target "new_lore", supply bookId from the context, or leave it empty to use the card\u2019s dedicated workshop lorebook. Use field "entry" and value {"comment":"title","key":["activation keyword"],"content":"entry text"}. To revise an existing pending new_lore proposal, include its proposalId.
+- For target "new_lore", supply bookId from the context, or leave it empty to use the card\u2019s dedicated forge lorebook. Use field "entry" and value {"comment":"title","key":["activation keyword"],"content":"entry text"}. To revise an existing pending new_lore proposal, include its proposalId.
 
 When asked for a complete card, propose the relevant fields separately so the writer can review them individually. Include an opening message. Use alternate greetings, dialogue examples, and prompt overrides when they serve the brief. Preserve populated fields unless the writer asks to revise them. The writer reviews and applies all proposed changes.`;
 function check(ok, message) {
@@ -158,7 +164,7 @@ function workshop(host) {
     let preset = null;
     if (s.presetId) {
       const record = await host.presets.get(s.presetId, u);
-      check(record, "The selected preset is unavailable. Choose another in workshop settings.");
+      check(record, "The selected preset is unavailable. Choose another in Forge settings.");
       preset = {
         name: record.name,
         blocks: record.prompt_order.filter((b) => b.enabled).map(({ name, role, position, content, marker }) => ({
@@ -231,7 +237,7 @@ function workshop(host) {
         value,
         before: null,
         bookId,
-        label: value.comment + " \xB7 " + (ctx.books.find((b) => b.id === bookId)?.name ?? "dedicated workshop lorebook")
+        label: value.comment + " \xB7 " + (ctx.books.find((b) => b.id === bookId)?.name ?? "dedicated forge lorebook")
       };
     }
     return {
@@ -256,7 +262,7 @@ function workshop(host) {
     if (req.action === "start") {
       const card = req.cardId ? await host.characters.get(req.cardId, u) : null;
       check(!req.cardId || card, "Card unavailable.");
-      const title = card?.name ?? string(req.title, "workshop name", 200).trim();
+      const title = card?.name ?? string(req.title, "card name", 200).trim();
       check(title, "Enter a card name.");
       const s = {
         id: crypto.randomUUID(),
@@ -274,10 +280,10 @@ function workshop(host) {
       return { session: s, sessions: index(), overview: await cardOverview(s, u) };
     }
     const s = state.sessions.find((x) => x.id === req.id);
-    check(s, "Workshop unavailable.");
+    check(s, "Forge unavailable.");
     if (req.action === "open")
       return { session: s, overview: await cardOverview(s, u) };
-    check(req.rev === s.rev, "This workshop changed. Reopen it before continuing.");
+    check(req.rev === s.rev, "This forge changed. Reopen it before continuing.");
     let overview;
     if (req.action === "settings") {
       s.presetId = req.presetId || null;
@@ -329,7 +335,7 @@ function workshop(host) {
       }
       return { session: s, sessions: index(), overview: await cardOverview(s, u) };
     } else
-      throw new Error("Unknown workshop action.");
+      throw new Error("Unknown forge action.");
     s.rev++;
     await save();
     return { session: s, sessions: index(), overview };
@@ -374,7 +380,7 @@ function workshop(host) {
       const books = await pages((offset) => host.world_books.list({ offset, limit: 100, userId: u }));
       let book = books.find((b) => b.metadata?.[NS] === card.id);
       if (!book)
-        book = await host.world_books.create({ name: card.name + " \xB7 Workshop", metadata: { [NS]: card.id } }, u);
+        book = await host.world_books.create({ name: card.name + " \xB7 Forge", metadata: { [NS]: card.id } }, u);
       bookId = book.id;
       if (!card.world_book_ids.includes(bookId))
         await host.characters.update(card.id, { world_book_ids: [...card.world_book_ids, bookId] }, u);
@@ -385,7 +391,7 @@ function workshop(host) {
       await host.world_books.entries.create(bookId, { ...p.value, extensions: { [NS]: p.id } }, u);
   }
   return function dispatch(userId, request) {
-    check(typeof userId === "string" && userId, "Sign in to use Card Workshop.");
+    check(typeof userId === "string" && userId, "Sign in to use Card Forge.");
     const task = (locks.get(userId) ?? Promise.resolve()).catch(() => {}).then(() => execute(userId, request));
     locks.set(userId, task);
     return task.finally(() => {
