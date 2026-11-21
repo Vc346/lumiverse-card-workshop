@@ -18,6 +18,7 @@ const fields = [
   "system_prompt",
   "post_history_instructions",
 ];
+const personaFields = ["name", "title", "description"];
 const templates = ["inline_tracker", "summary_prompt", "summary_user_prompt", "ledger_prompt"];
 const instruction = `You’re Murasaki. Here’s how you think about the work.
 
@@ -74,6 +75,9 @@ Talk things through freely. Propose edits only when asked. Return one JSON objec
 
 Each change has target, field, and value.
 
+- A player persona describes the identity the writer plays. Keep it separate from the character or scenario card.
+- For a new player persona use target "new_persona", field "persona", and value {"name":"Name","title":"Tagline","description":"Description"}. To revise a pending new persona, include its proposalId.
+- To revise the selected player persona, use target "persona" and field "name", "title", or "description" with a replacement string. Forge supplies the selected persona in the context.
 - For target "card", use one of the supplied card fields. Use a replacement string except for "alternate_greetings", which takes an ordered array of strings.
 - For target "template", use "inline_tracker", "summary_prompt", "summary_user_prompt", or "ledger_prompt" with a replacement string.
 - For target "tracker_regex", use field "display" and value {"tag":"scene_state","title":"Scene state","accent":"theme","sample":"Location: The slipway"}. The sample is plain tracker body text without tags. Available accents are theme, ocean, amber, and rose. Use the same tag to revise an existing Forge tracker rule. This rule styles rendered assistant replies for this card.
@@ -159,17 +163,39 @@ export function registerInlineTracker(host) {
 
 export function workshop(host) {
   const locks = new Map();
+  async function listPersonas(userId) {
+    if (!host.personas?.list) return [];
+    try {
+      return await pages((offset) => host.personas.list({ offset, limit: 100, userId }));
+    } catch (error) {
+      if (String(error.message).includes("PERMISSION_DENIED")) return [];
+      throw error;
+    }
+  }
+
+  async function selectedPersona(id, userId) {
+    if (typeof id !== "string" || !id || !host.personas?.get) return null;
+    try {
+      return await host.personas.get(id, userId);
+    } catch (error) {
+      if (String(error.message).includes("PERMISSION_DENIED")) return null;
+      throw error;
+    }
+  }
+
   async function catalog(userId) {
-    const [cards, presets, connections] = await Promise.all([
+    const [cards, presets, connections, personas] = await Promise.all([
       pages((offset) => host.characters.list({ offset, limit: 100, userId })),
       pages((offset) => host.presets.list({ offset, limit: 100, userId })),
       host.connections.list(userId),
+      listPersonas(userId),
     ]);
     const names = (rows) => rows.map(({ id, name }) => ({ id, name }));
     return {
       cards: names(cards),
       presets: names(presets),
       connections: names(connections),
+      personas: names(personas),
     };
   }
   async function trackerScripts(cardId, userId, requirePermission = false) {
@@ -218,6 +244,9 @@ export function workshop(host) {
         templates.map((f) => [f, card.extensions?.[NS]?.[f] ?? ""]),
       ),
       books,
+      persona: await selectedPersona(s.personaId, u).then((persona) => persona && ({
+        id: persona.id, name: persona.name, title: persona.title ?? "", description: persona.description ?? "",
+      })),
       trackerRules: (await trackerScripts(s.cardId, u)).map((script) => ({
         tag: trackerTag(script),
         name: script.name,
@@ -259,6 +288,30 @@ export function workshop(host) {
   function proposal(raw, ctx, rules) {
     const { target, field } = raw;
     let key, before, value;
+    if (target === "new_persona") {
+      check(field === "persona" && raw.value, "Invalid new persona proposal.");
+      const value = {
+        name: string(raw.value.name, "persona name", 200).trim(),
+        title: string(raw.value.title ?? "", "persona tagline", 300),
+        description: string(raw.value.description ?? "", "persona description"),
+      };
+      check(value.name, "A persona needs a name.");
+      const prior = ctx.pending.find((p) => p.target === target && p.id === raw.proposalId);
+      return {
+        id: prior?.id ?? crypto.randomUUID(), target, field, value,
+        before: null, label: value.name + " · New persona",
+      };
+    }
+    if (target === "persona") {
+      check(ctx.persona && personaFields.includes(field), "Select a persona in Forge settings first.");
+      value = string(raw.value, "persona " + field, field === "name" ? 200 : field === "title" ? 300 : 100000);
+      if (field === "name") check(value.trim(), "A persona needs a name.");
+      return {
+        id: "persona." + ctx.persona.id + "." + field, target, field, value,
+        personaId: ctx.persona.id, before: ctx.persona[field], label: ctx.persona.name + " · " +
+          ({ name: "Persona name", title: "Tagline", description: "Persona description" })[field],
+      };
+    }
     if (target === "tracker_regex") {
       check(field === "display", "Unknown tracker rule operation.");
       value = trackerProposal(raw.value);
@@ -436,6 +489,7 @@ export function workshop(host) {
         cardId: card?.id ?? null,
         presetId: req.presetId || null,
         connectionId: req.connectionId || null,
+        personaId: (await selectedPersona(req.personaId, u))?.id ?? null,
         messages: [],
         pending: [],
       };
@@ -476,6 +530,9 @@ export function workshop(host) {
     if (req.action === "settings") {
       s.presetId = req.presetId || null;
       s.connectionId = req.connectionId || null;
+      if (req.personaId !== undefined)
+        s.personaId = (await selectedPersona(req.personaId, u))?.id ?? null;
+      overview = await cardOverview(s, u);
     } else if (req.action === "talk") {
       const text = string(req.text, "message", 32000).trim();
       check(text, "Enter a message.");
@@ -510,24 +567,58 @@ export function workshop(host) {
         { role: "user", content: text },
         { role: "assistant", content: answer.reply },
       );
+    } else if (req.action === "clear_persona_binding") {
+      check(s.personaBinding && req.personaId === s.personaBinding.personaId,
+        "The pending persona binding changed.");
+      delete s.personaBinding;
     } else if (req.action === "review") {
       const selected = s.pending.filter((p) => req.ids?.includes(p.id));
       check(selected.length, "Select at least one proposal.");
       check(["apply", "discard"].includes(req.decision), "Unknown decision.");
       for (const p of selected) {
-        if (req.decision === "apply") await apply(s, p, u, save);
+        if (req.decision === "apply") {
+          const bind = req.bindPersona?.proposalId === p.id ? req.bindPersona : null;
+          await apply(s, p, u, save, bind);
+        }
         s.pending = s.pending.filter((x) => x.id !== p.id);
         s.rev++;
         await save(); // Each confirmed write is resumable if a later proposal conflicts.
       }
-      return { session: s, sessions: index(), overview: await cardOverview(s, u) };
+      return {
+        session: s, sessions: index(), overview: await cardOverview(s, u),
+        personas: (await listPersonas(u)).map(({ id, name }) => ({ id, name })),
+      };
     } else throw new Error("Unknown forge action.");
     s.rev++;
     await save();
     return { session: s, sessions: index(), overview };
   }
 
-  async function apply(s, p, u, save) {
+  async function apply(s, p, u, save, bind) {
+    if (p.target === "new_persona") {
+      check(host.personas?.create, "Persona creation is unavailable.");
+      const personas = await listPersonas(u);
+      const persona = personas.find((item) =>
+        item.metadata?.[NS]?.forge === s.id && item.metadata?.[NS]?.proposal === p.id
+      ) ?? await host.personas.create({
+        ...p.value, metadata: { [NS]: { forge: s.id, proposal: p.id } },
+      }, u);
+      s.personaId = persona.id;
+      if (bind) s.personaBinding = {
+        personaId: persona.id,
+        expectedPersonaId: typeof bind.expectedPersonaId === "string" ? bind.expectedPersonaId : null,
+      };
+      return;
+    }
+    if (p.target === "persona") {
+      const persona = await host.personas.get(p.personaId, u);
+      check(persona, "Persona unavailable.");
+      const current = persona[p.field] ?? "";
+      check(current === p.before || current === p.value,
+        "Persona field changed since proposal. Request a revision.");
+      if (current !== p.value) await host.personas.update(persona.id, { [p.field]: p.value }, u);
+      return;
+    }
     if (p.target === "tracker_regex") {
       check(host.regex_scripts?.create, "Tracker display rules require Lumiverse’s Regex Scripts API.");
     }

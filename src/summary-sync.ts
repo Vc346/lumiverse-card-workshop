@@ -1,18 +1,8 @@
+import { request } from "./lumiverse-api";
 import { hasSummaryInputs, missingSummaryInputs } from "./summary-prompts";
 
 const CONFIG_KEY = "summary:prompt_sync";
 const defaults = { enabled: false, fallback: "", fallbackUser: "", original: null };
-
-async function request(path, options = {}) {
-  const response = await fetch("/api/v1/" + path, {
-    credentials: "same-origin",
-    signal: AbortSignal.timeout(12000),
-    ...options,
-  });
-  if (response.status === 404 && !options.method) return null;
-  if (!response.ok) throw new Error("Lumiverse request failed (" + response.status + ").");
-  return response.json();
-}
 
 function usablePrompt(value) {
   return typeof value === "string" && value.trim() ? value : null;

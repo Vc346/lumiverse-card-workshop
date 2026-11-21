@@ -5304,15 +5304,7 @@ function trackerScript({ tag, title, accent }) {
   };
 }
 
-// src/summary-prompts.ts
-var missingSummaryInputs = "A custom summary user prompt needs {{conversation}} and either {{previousSummaryBlock}} or {{existingSummary}}.";
-function hasSummaryInputs(prompt) {
-  return prompt.includes("{{conversation}}") && (prompt.includes("{{previousSummaryBlock}}") || prompt.includes("{{existingSummary}}"));
-}
-
-// src/summary-sync.ts
-var CONFIG_KEY = "summary:prompt_sync";
-var defaults = { enabled: false, fallback: "", fallbackUser: "", original: null };
+// src/lumiverse-api.ts
 async function request(path, options = {}) {
   const response = await fetch("/api/v1/" + path, {
     credentials: "same-origin",
@@ -5325,6 +5317,16 @@ async function request(path, options = {}) {
     throw new Error("Lumiverse request failed (" + response.status + ").");
   return response.json();
 }
+
+// src/summary-prompts.ts
+var missingSummaryInputs = "A custom summary user prompt needs {{conversation}} and either {{previousSummaryBlock}} or {{existingSummary}}.";
+function hasSummaryInputs(prompt) {
+  return prompt.includes("{{conversation}}") && (prompt.includes("{{previousSummaryBlock}}") || prompt.includes("{{existingSummary}}"));
+}
+
+// src/summary-sync.ts
+var CONFIG_KEY = "summary:prompt_sync";
+var defaults = { enabled: false, fallback: "", fallbackUser: "", original: null };
 function usablePrompt(value) {
   return typeof value === "string" && value.trim() ? value : null;
 }
@@ -5423,6 +5425,33 @@ function createSummarySync(settings, api = request) {
       disposed = true;
     }
   };
+}
+
+// src/persona-binding.ts
+var path = "settings/characterPersonaBindings";
+function bindingId(binding) {
+  if (typeof binding === "string")
+    return binding;
+  return binding?.personaId ?? null;
+}
+async function readBindings(api) {
+  return (await api(path))?.value ?? {};
+}
+async function readPersonaBinding(cardId, api = request) {
+  return cardId ? bindingId((await readBindings(api))[cardId]) : null;
+}
+async function bindPersona(cardId, personaId, expectedPersonaId, api = request) {
+  const bindings = await readBindings(api);
+  const current = bindingId(bindings[cardId]);
+  if (current === personaId)
+    return;
+  if (current !== expectedPersonaId)
+    throw new Error("The card’s persona binding changed in Lumiverse.");
+  await api(path, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ value: { ...bindings, [cardId]: personaId } })
+  });
 }
 
 // src/frontend.ts
@@ -5746,7 +5775,7 @@ function setup(ctx) {
     .vv-author .vv-status { color: var(--lumiverse-text-muted) }
   `);
   let library, sessions = [], session = null, overview = null, busy = false, status = "", alive = true;
-  let draft = "", setupCard = "", setupTitle = "", setupKind = "character", preset = "", connection = "";
+  let draft = "", setupCard = "", setupTitle = "", setupKind = "character", persona = "", preset = "", connection = "";
   let creationModal = null;
   let summaryModal = null;
   let deleteModal = null;
@@ -5765,6 +5794,8 @@ function setup(ctx) {
       component.destroy();
   }
   let selected = new Set;
+  let cardBinding;
+  let personaToBind = null;
   let activeTab = "chat";
   const openSections = new Map;
   const scrollPositions = new Map;
@@ -5847,14 +5878,25 @@ function setup(ctx) {
       if (data.session) {
         session = data.session;
         if (action !== "refresh") {
+          persona = session.personaId || "";
           preset = session.presetId || "";
           connection = session.connectionId || "";
         }
       }
       if (["open", "start", "talk"].includes(action))
         draft = "";
+      if (data.personas)
+        library.personas = data.personas;
       selected = new Set;
+      personaToBind = null;
       status = "";
+      if (session && (action === "review" || action === "open" || action === "start" || action === "refresh")) {
+        if (action === "review" && args.decision === "apply" && session.cardId && session.personaBinding)
+          await finishPersonaBinding();
+        cardBinding = await readPersonaBinding(session.cardId).catch(() => {
+          return;
+        });
+      }
     } catch (error) {
       status = error.message;
       if (session && action === "review") {
@@ -5862,6 +5904,9 @@ function setup(ctx) {
           const data = await rpc({ action: "open", id: session.id });
           session = data.session;
           overview = data.overview;
+          cardBinding = await readPersonaBinding(session.cardId).catch(() => {
+            return;
+          });
           if (args.decision === "apply")
             summarySync?.follow().catch(reportSummaryError);
         } catch {}
@@ -5870,6 +5915,39 @@ function setup(ctx) {
       busy = false;
       if (alive)
         render(action === "talk");
+    }
+  }
+  async function finishPersonaBinding() {
+    const { id, rev, cardId, personaBinding } = session;
+    if (!cardId || !personaBinding)
+      return;
+    try {
+      await bindPersona(cardId, personaBinding.personaId, personaBinding.expectedPersonaId);
+      session = (await rpc({
+        action: "clear_persona_binding",
+        id,
+        rev,
+        personaId: personaBinding.personaId
+      })).session;
+      status = "";
+    } catch (error) {
+      status = "Persona saved. Binding is pending. " + error.message;
+    }
+  }
+  async function retryPersonaBinding() {
+    if (busy)
+      return;
+    busy = true;
+    render();
+    try {
+      await finishPersonaBinding();
+      cardBinding = await readPersonaBinding(session.cardId).catch(() => {
+        return;
+      });
+    } finally {
+      busy = false;
+      if (alive)
+        render();
     }
   }
   function element(parent, tag, text = "") {
@@ -5922,6 +6000,9 @@ function setup(ctx) {
   function selectors(parent) {
     select(parent, "Writing preset", [option("", "No preset"), ...library.presets], preset, (v) => preset = v);
     select(parent, "LLM connection", [option("", "Active Lumiverse connection"), ...library.connections], connection, (v) => connection = v);
+  }
+  function personaSelector(parent) {
+    select(parent, "Player persona", [option("", "No persona selected"), ...library.personas ?? []], persona, (value) => persona = value);
   }
   function home() {
     const heading = element(root, "div");
@@ -6113,6 +6194,7 @@ function setup(ctx) {
     setupCard = "";
     setupTitle = "";
     setupKind = "character";
+    persona = "";
     preset = "";
     connection = "";
     const modal = ctx.ui.showModal({ title: "New forge" });
@@ -6150,6 +6232,7 @@ function setup(ctx) {
     input.oninput = () => setupTitle = input.value;
     select(form, "Forge type", [option("character", "Character"), option("scenario", "Scenario")], setupKind, (value) => setupKind = value);
     selectors(form);
+    personaSelector(form);
     if (status)
       showStatus(form);
     const actions = element(form, "div");
@@ -6164,7 +6247,8 @@ function setup(ctx) {
         kind: setupKind,
         cardId: setupCard,
         presetId: preset,
-        connectionId: connection
+        connectionId: connection,
+        personaId: persona
       });
     };
     return form;
@@ -6206,6 +6290,8 @@ function setup(ctx) {
       draft = "";
       preset = "";
       connection = "";
+      persona = "";
+      cardBinding = undefined;
       selected.clear();
       run("home");
     });
@@ -6261,7 +6347,8 @@ function setup(ctx) {
     else {
       element(panel, "h3", "Forge settings");
       selectors(panel);
-      button(panel, "Save settings", () => run("settings", { presetId: preset, connectionId: connection }));
+      personaSelector(panel);
+      button(panel, "Save settings", () => run("settings", { presetId: preset, connectionId: connection, personaId: persona }));
     }
   }
   function chat(panel) {
@@ -6351,6 +6438,15 @@ function setup(ctx) {
         displayValue(details, value);
       }
     }
+    if (overview.persona) {
+      const player = overview.persona;
+      const details = disclosure(section, "player-persona", player.name + " · Player persona");
+      if (player.title)
+        displayValue(details, player.title);
+      displayValue(details, player.description);
+      if (cardBinding === player.id)
+        element(details, "p", "Bound to this card in Lumiverse.");
+    }
     if (overview.trackerRules?.length) {
       element(section, "strong", "Tracker display rules");
       for (const rule of overview.trackerRules) {
@@ -6392,12 +6488,18 @@ function setup(ctx) {
   function proposals(parent) {
     const review = parent;
     element(review, "h3", "Proposed changes");
+    if (session.personaBinding) {
+      element(review, "p", session.cardId ? "This persona has a pending card binding." : "The approved persona will bind when you save the card.");
+      if (session.cardId)
+        button(review, "Retry persona binding", retryPersonaBinding);
+      button(review, "Cancel pending binding", () => run("clear_persona_binding", { personaId: session.personaBinding.personaId }));
+    }
     if (!session.pending.length) {
       element(review, "p", "No pending changes. Ask Murasaki to draft or revise a field.");
       return;
     }
     if (!session.cardId)
-      element(review, "p", "Applying your first selection creates this card in the library.");
+      element(review, "p", "Applying card changes creates this card in the library.");
     for (const p of session.pending) {
       const label = proposalLabel(p);
       const row = element(review, "div");
@@ -6413,6 +6515,10 @@ function setup(ctx) {
         element(details, "strong", "Current value");
         displayValue(details, p.before);
       }
+      if (p.target === "new_persona") {
+        newPersonaReview(details, p);
+        continue;
+      }
       if (p.target === "tracker_regex") {
         trackerReview(details, p.value);
         continue;
@@ -6427,7 +6533,47 @@ function setup(ctx) {
       ["apply", "Apply selected"],
       ["discard", "Discard selected"]
     ])
-      button(actions, label, () => run("review", { decision, ids: [...selected] }), decision === "apply");
+      button(actions, label, () => {
+        const proposalId = bindingChoice();
+        run("review", {
+          decision,
+          ids: [...selected],
+          bindPersona: decision === "apply" && selected.has(proposalId) ? { proposalId, expectedPersonaId: cardBinding ?? null } : null
+        });
+      }, decision === "apply");
+  }
+  function bindingChoice() {
+    if (personaToBind !== null)
+      return personaToBind;
+    if (cardBinding === null && !session.personaBinding)
+      return session.pending.find((proposal) => proposal.target === "new_persona")?.id ?? "";
+    return "";
+  }
+  function newPersonaReview(details, proposal) {
+    for (const [field, label] of [["name", "Name"], ["title", "Tagline"], ["description", "Description"]]) {
+      element(details, "strong", label);
+      displayValue(details, proposal.value[field]);
+    }
+    if (cardBinding === undefined) {
+      element(details, "p", "Could not check the card’s binding. Refresh the forge to enable binding.");
+      return;
+    }
+    const row = element(details, "label", " Bind to this card");
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = bindingChoice() === proposal.id;
+    box.disabled = busy;
+    row.prepend(box);
+    box.onchange = () => {
+      personaToBind = box.checked ? proposal.id : "";
+      render();
+    };
+    if (cardBinding) {
+      const current = (library.personas ?? []).find((item) => item.id === cardBinding);
+      element(details, "p", current ? "This will replace the binding to " + current.name + "." : "This will replace the card’s existing persona binding.");
+    } else if (!session.cardId) {
+      element(details, "p", "The binding applies once the card is saved.");
+    }
   }
   function trackerReview(details, rule) {
     const script = trackerScript(rule);

@@ -22,6 +22,12 @@ Open **Card & lore** to see which card fields and forge prompts are saved, empty
 
 Expand a linked lorebook to see its entries and activation keywords. To create an entry, ask Murasaki to draft one and name a linked lorebook if you have a specific destination. Approve it in **Review**. If you leave the destination up to Murasaki, it can use a dedicated lorebook that the extension creates and attaches on approval.
 
+## Create or revise a player persona
+
+Ask Murasaki to draft a new persona, expand the proposal in **Review**, and select **Apply** to save it to Lumiverse’s Persona library. **Bind to this card** is selected by default when the card has no binding. For a new card, Forge waits until the card is saved. When there’s an existing binding, select the checkbox to confirm replacing it.
+
+Choose a **Player persona** in Forge settings to give Murasaki context and request changes to its name, tagline, or description. Approved edits update the selected persona in Lumiverse. A card binding lets Lumiverse select the persona when opening the card’s chats. Removing a forge keeps its persona in the library.
+
 ## Delete a forge
 
 Use the trash button beside a forge. The default removes its conversation and pending proposals. If the forge created the card and no other forge uses it, you can also choose to remove the card, its Forge tracker rules, and an unshared dedicated lorebook. Lumiverse also removes roleplay chats that use the deleted card as their primary character. Card Forge uses the **Chats** and **Personas** permissions to check for shared lorebooks before offering asset cleanup.

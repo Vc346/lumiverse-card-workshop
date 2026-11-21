@@ -433,3 +433,35 @@ test("asset deletion removes only approved owned resources and checks shared lor
   expect(f.books.map((row) => row.name).sort()).toEqual(keptBooks.map((row) => row.name).sort());
   expect((await run("alice", { action: "home" })).sessions).toHaveLength(0);
 });
+
+test("creates a persona independently and keeps the approved binding until the card exists", async () => {
+  const f = fixture();
+  const run = workshop(f.host);
+  const session = await startForge(run, "Slipway");
+  f.respond({ reply: "A player for this scene.", changes: [
+    { target: "new_persona", field: "persona", value: { name: "Avery", title: "Boat mechanic", description: "Repairs old engines." } },
+  ] });
+  const request = (s, action, args = {}) => run("alice", { action, id: s.id, rev: s.rev, ...args });
+  const { session: draft } = await request(session, "talk", { text: "Draft a persona." });
+  expect(f.personas).toHaveLength(0);
+  const proposalId = draft.pending[0].id;
+  const { session: saved, overview } = await request(draft, "review", {
+    decision: "apply", ids: [proposalId], bindPersona: { proposalId, expectedPersonaId: null },
+  });
+  expect(f.cards).toHaveLength(0);
+  expect(overview.persona.name).toBe("Avery");
+  expect(saved.personaBinding).toEqual({ personaId: f.personas[0].id, expectedPersonaId: null });
+  f.respond({ reply: "Here’s the description.", changes: [
+    { target: "persona", field: "description", value: "Carries a small wrench." },
+    { target: "card", field: "description", value: "A dry dock." },
+  ] });
+  const { session: edited } = await request(saved, "talk", { text: "Revise the persona and card." });
+  const { session: cardSaved } = await request(edited, "review", {
+    decision: "apply", ids: edited.pending.map(({ id }) => id),
+  });
+  expect(f.personas[0].description).toBe("Carries a small wrench.");
+  expect(cardSaved.cardId).toBe(f.cards[0].id);
+  expect(cardSaved.personaBinding).toEqual(saved.personaBinding);
+  const { session: cleared } = await request(cardSaved, "clear_persona_binding", { personaId: f.personas[0].id });
+  expect(cleared.personaBinding).toBeUndefined();
+});
