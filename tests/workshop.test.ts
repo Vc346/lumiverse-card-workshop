@@ -95,6 +95,10 @@ test("brainstorm, revise, selectively apply, resume and detect concurrent edits"
   expect(f.cards).toHaveLength(0);
   expect(f.calls[0].connection_id).toBe("nano");
   expect(f.calls[0].userId).toBe("alice");
+  expect(f.calls[0].messages[0].content).toContain("You’re Murasaki");
+  expect(f.calls[0].messages[0].content).toContain("Return one JSON object");
+  const reference = JSON.parse(f.calls[0].messages[1].content.split("\n")[1]);
+  expect(reference.card.system_prompt).toContain("player’s persona alone");
   expect(f.calls[0].messages[1].content).toContain("Slow pacing");
   expect(f.calls[0].messages[1].content).not.toContain("Disabled prompt");
   const changes = [
@@ -127,7 +131,7 @@ test("brainstorm, revise, selectively apply, resume and detect concurrent edits"
     ids: [s.pending[0].id, s.pending[1].id],
   });
   expect(f.cards[0].description).toBe(changes[0].value);
-  expect(f.cards[0].system_prompt).toContain("ensemble");
+  expect(f.cards[0].system_prompt).toBe(reference.card.system_prompt);
   expect(f.cards[0].world_book_ids).toEqual([f.books[0].id]);
   expect(f.entries[0].content).toBe("Ivo has the key.");
   expect(s.pending).toHaveLength(1);

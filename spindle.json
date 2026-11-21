@@ -1,11 +1,11 @@
 {
   "identifier": "voidverse_author",
   "name": "Card Workshop",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "author": "VoidVerse",
   "github": "https://github.com/Vc346/lumiverse-card-workshop",
   "homepage": "https://github.com/Vc346/lumiverse-card-workshop",
-  "description": "Workshop characters, ensemble scenarios and their lore through conversation.",
+  "description": "Workshop original characters, scenarios and their lore through conversation.",
   "permissions": ["generation", "characters", "world_books", "presets"],
   "entry_backend": "dist/backend.js",
   "entry_frontend": "dist/frontend.js"

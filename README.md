@@ -1,6 +1,6 @@
 # Card Workshop for Lumiverse
 
-A Spindle extension for developing characters and ensemble scenarios through conversation. Each workshop keeps its own conversation, card, writing preset and pending proposals. The backend uses a Lumiverse connection and scopes workshop storage to the signed-in user.
+A Spindle extension for developing original characters and roleplay scenarios with Murasaki through conversation. Each workshop keeps its own conversation, card, writing preset and pending proposals. The backend uses a Lumiverse connection and scopes workshop storage to the signed-in user.
 
 ## Install
 
@@ -24,7 +24,7 @@ Expand a linked lorebook to see its entries and activation keywords. To create a
 
 ## What gets saved
 
-- The workshop can propose changes to the name, description, personality, scenario, opening message, alternate greetings, example dialogue, creator notes, system prompt and post-history instructions. New ensemble cards include a narrator instruction that preserves player agency.
+- The workshop can propose changes to the name, description, personality, scenario, opening message, alternate greetings, example dialogue, creator notes, system prompt and post-history instructions. New scenario cards include a narrator prompt that moves the story forward, including scenes where the player’s persona is alone.
 - The workshop reads directly attached world books. It can create keyword entries and revise entry titles, activation keys and content. If a new entry needs a dedicated book, applying it creates or reuses the card’s workshop book and attaches it.
 - Card-specific templates live under `character.extensions.voidverse_author` as `inline_tracker`, `summary_prompt` and `ledger_prompt`. These are authoring outputs for the planned continuity integration.
 - The selected preset provides enabled blocks in stored order, including their roles and placement. The model receives their authored text, linked lore, card fields, pending edits and workshop conversation. Model context limits apply to large presets, books and conversations.

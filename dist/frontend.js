@@ -5753,7 +5753,7 @@ function setup(ctx) {
     }
     select(root, "Workshop type", [
       option("character", "Character"),
-      option("scenario", "Ensemble scenario")
+      option("scenario", "Scenario")
     ], setupKind, (v) => setupKind = v);
     selectors(root);
     button(root, "Start workshop", () => run("start", {
@@ -5868,12 +5868,12 @@ function setup(ctx) {
       row.className = "vv-message";
       row.dataset.role = message.role;
       const isUser = message.role === "user";
-      const avatar = element(row, "span", isUser ? "Y" : "A");
+      const avatar = element(row, "span", isUser ? "Y" : "M");
       avatar.className = "vv-avatar";
       avatar.setAttribute("aria-hidden", "true");
       const bubble = element(row, "div");
       bubble.className = "vv-bubble";
-      element(bubble, "strong", isUser ? "You" : "Author");
+      element(bubble, "strong", isUser ? "You" : "Murasaki");
       if (isUser) {
         element(bubble, "p", message.content);
       } else {
@@ -5888,7 +5888,7 @@ function setup(ctx) {
     const input = element(composer, "textarea");
     input.className = "vv-input";
     input.setAttribute("aria-label", "Workshop message");
-    input.placeholder = "Message the author…";
+    input.placeholder = "Message Murasaki…";
     input.rows = 2;
     input.value = draft;
     input.disabled = busy;
