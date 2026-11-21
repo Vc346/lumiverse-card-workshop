@@ -5285,7 +5285,7 @@ _defineProperty(MarkdownIt, "StateInline", StateInline);
 var MarkdownItCallable = callable(MarkdownIt);
 
 // src/summary-sync.ts
-var CONFIG_KEY = "summary-prompt-sync";
+var CONFIG_KEY = "summary:prompt_sync";
 var defaults = { enabled: false, fallback: "", original: null };
 async function request(path, options = {}) {
   const response = await fetch("/api/v1/" + path, {

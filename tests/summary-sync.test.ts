@@ -9,8 +9,14 @@ function fixture() {
     ? { extensions: { voidverse_author: { summary_prompt: "Track the tide." } } }
     : { extensions: {} };
   const settings = {
-    get: async () => structuredClone(config),
-    set: async (_, value) => { config = structuredClone(value); },
+    get: async (key) => {
+      expect(key).toMatch(/^[a-z][a-z0-9_]*:[A-Za-z0-9._-]+$/);
+      return structuredClone(config);
+    },
+    set: async (key, value) => {
+      expect(key).toMatch(/^[a-z][a-z0-9_]*:[A-Za-z0-9._-]+$/);
+      config = structuredClone(value);
+    },
   };
   const api = async (path, options) => {
     if (path === "settings/activeChatId") return { value: "custom" };

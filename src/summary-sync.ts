@@ -1,4 +1,4 @@
-const CONFIG_KEY = "summary-prompt-sync";
+const CONFIG_KEY = "summary:prompt_sync";
 const defaults = { enabled: false, fallback: "", original: null };
 
 async function request(path, options = {}) {
