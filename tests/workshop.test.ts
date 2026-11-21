@@ -7,11 +7,20 @@ function fixture() {
     books = [],
     entries = [],
     scripts = [],
+    chats = [],
+    personas = [],
+    globalBooks = [],
     calls = [];
   let answer;
   function collection(list) {
     return {
       list: async () => ({ data: structuredClone(list), total: list.length }),
+      delete: async (id) => {
+        const index = list.findIndex((row) => row.id === id);
+        if (index < 0) return false;
+        list.splice(index, 1);
+        return true;
+      },
       get: async (id) => structuredClone(list.find((row) => row.id === id)),
       create: async (body) => {
         const row = { id: crypto.randomUUID(), world_book_ids: [], ...body };
@@ -27,6 +36,8 @@ function fixture() {
   }
   const host = {
     characters: collection(cards),
+    chats: collection(chats),
+    personas: collection(personas),
     regex_scripts: {
       ...collection(scripts),
       list: async ({ scope, scopeId }) => {
@@ -37,6 +48,7 @@ function fixture() {
     },
     world_books: {
       ...collection(books),
+      getGlobal: async () => [...globalBooks],
       entries: {
         ...collection(entries),
         list: async (book) => {
@@ -82,6 +94,9 @@ function fixture() {
     books,
     entries,
     scripts,
+    chats,
+    personas,
+    globalBooks,
     calls,
     respond: (value) => (answer = value),
   };
@@ -351,4 +366,70 @@ test("the inline tracker macro resolves the card and user from each generation",
   expect(await resolve("card-empty", "alice")).toBe("");
   expect(await resolve("card-a", undefined)).toBe("");
   expect(calls).toHaveLength(5);
+});
+
+async function startForge(run, title) {
+  const { session } = await run("alice", { action: "start", title });
+  return session;
+}
+
+test("forge-only deletion keeps all related records and guards cards used by another forge", async () => {
+  const f = fixture();
+  const run = workshop(f.host);
+  const card = await f.host.characters.create({ name: "Archive" });
+  const { session } = await run("alice", { action: "start", cardId: card.id });
+  const preview = await run("alice", { action: "delete_preview", id: session.id });
+  expect(preview.plan).toBeNull();
+  const result = await run("alice", { action: "delete", id: session.id, rev: preview.rev });
+  expect(result.sessions).toHaveLength(0);
+  expect(f.cards[0].id).toBe(card.id);
+
+  const forge = await startForge(run, "Draft");
+  const owned = await f.host.characters.create({ name: "Draft", extensions: { voidverse_author: { workshop: forge.id } } });
+  f.respond({ reply: "Saved.", changes: [{ target: "card", field: "description", value: "The setting." }] });
+  const { session: drafted } = await run("alice", { action: "talk", id: forge.id, rev: forge.rev, text: "Save this." });
+  await run("alice", { action: "review", id: forge.id, rev: drafted.rev, decision: "apply", ids: [drafted.pending[0].id] });
+  await run("alice", { action: "start", cardId: owned.id });
+  expect((await run("alice", { action: "delete_preview", id: forge.id })).plan).toBeNull();
+});
+
+test("asset deletion removes only approved owned resources and checks shared lore links again", async () => {
+  const f = fixture();
+  const run = workshop(f.host);
+  const forge = await startForge(run, "Slipway");
+  f.respond({ reply: "Three additions.", changes: [
+    { target: "card", field: "description", value: "A slipway." },
+    { target: "new_lore", field: "entry", value: { comment: "Tides", key: ["tide"], content: "Rises quickly." } },
+    { target: "tracker_regex", field: "display", value: { tag: "scene_state", title: "State", sample: "Tide: high" } },
+  ] });
+  const { session: drafted } = await run("alice", { action: "talk", id: forge.id, rev: forge.rev, text: "Use these." });
+  const { session } = await run("alice", {
+    action: "review", id: forge.id, rev: drafted.rev, decision: "apply", ids: drafted.pending.map((p) => p.id),
+  });
+  const card = f.cards[0];
+  const originalBook = f.books[0];
+  const keptBooks = await Promise.all(["persona", "chat", "global", "character", "imported"].map((name) =>
+    f.host.world_books.create({ name, metadata: name === "imported" ? {} : { voidverse_author: card.id } })));
+  card.world_book_ids.push(...keptBooks.map((book) => book.id));
+  f.personas.push({ attached_world_book_id: keptBooks[0].id });
+  f.chats.push({ id: "other-chat", character_id: "other", metadata: { chat_world_book_ids: [keptBooks[1].id] } });
+  f.globalBooks.push(keptBooks[2].id);
+  await f.host.characters.create({ name: "Other", world_book_ids: [keptBooks[3].id] });
+  await f.host.regex_scripts.create({ name: "Other rule", scope: "character", scope_id: card.id });
+  f.chats.push({ id: "primary-chat", character_id: card.id });
+  const preview = await run("alice", { action: "delete_preview", id: session.id });
+  expect(preview.plan.books.map((book) => book.id)).toEqual([originalBook.id]);
+  expect(preview.plan.scripts.map((script) => script.name)).toEqual(["State · Tracker display"]);
+  expect(preview.plan.chatCount).toBe(1);
+  const command = { action: "delete", id: session.id, rev: preview.rev, assetToken: preview.plan.token };
+  f.globalBooks.push(originalBook.id);
+  await expect(run("alice", command)).rejects.toThrow("linked assets changed");
+  expect(f.cards).toHaveLength(2);
+  expect(f.scripts).toHaveLength(2);
+  f.globalBooks.pop();
+  await run("alice", command);
+  expect(f.cards.map((row) => row.name)).toEqual(["Other"]);
+  expect(f.scripts.map((row) => row.name)).toEqual(["Other rule"]);
+  expect(f.books.map((row) => row.name).sort()).toEqual(keptBooks.map((row) => row.name).sort());
+  expect((await run("alice", { action: "home" })).sessions).toHaveLength(0);
 });

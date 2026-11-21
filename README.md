@@ -22,6 +22,10 @@ Open **Card & lore** to see which card fields and forge prompts are saved, empty
 
 Expand a linked lorebook to see its entries and activation keywords. To create an entry, ask Murasaki to draft one and name a linked lorebook if you have a specific destination. Approve it in **Review**. If you leave the destination up to Murasaki, it can use a dedicated lorebook that the extension creates and attaches on approval.
 
+## Delete a forge
+
+Use the trash button beside a forge. The default removes its conversation and pending proposals. If the forge created the card and no other forge uses it, you can also choose to remove the card, its Forge tracker rules, and an unshared dedicated lorebook. Lumiverse also removes roleplay chats that use the deleted card as their primary character. Card Forge uses the **Chats** and **Personas** permissions to check for shared lorebooks before offering asset cleanup.
+
 ## Use an inline tracker
 
 Ask Murasaki for an inline tracker and a matching display rule. In **Review**, expand the rule to see a sample reply, its collapsible preview, and the regex. Applying saves a native character-scoped rule for AI replies. It formats the tagged tracker block on display and leaves the stored reply intact. Forge can revise its own rule when you ask it to use the same tag. Grant **Regex Scripts** permission in Spindle to apply rules.

@@ -172,15 +172,19 @@ export function workshop(host) {
       connections: names(connections),
     };
   }
-  async function trackerScripts(cardId, userId) {
-    if (!cardId || !host.regex_scripts?.list) return [];
+  async function trackerScripts(cardId, userId, requirePermission = false) {
+    if (!cardId) return [];
+    if (!host.regex_scripts?.list) {
+      check(!requirePermission, "Lumiverse’s Regex Scripts API is unavailable.");
+      return [];
+    }
     try {
       const scripts = await pages((offset) => host.regex_scripts.list({
         scope: "character", scopeId: cardId, limit: 100, offset, userId,
       }));
       return scripts.filter((script) => script.can_mutate && trackerTag(script));
     } catch (error) {
-      if (String(error.message).includes("PERMISSION_DENIED")) return [];
+      if (!requirePermission && String(error.message).includes("PERMISSION_DENIED")) return [];
       throw error;
     }
   }
@@ -364,6 +368,45 @@ export function workshop(host) {
     };
   }
 
+  async function deletionPlan(session, sessions, userId) {
+    const card = session.cardId
+      ? await host.characters.get(session.cardId, userId)
+      : null;
+    if (!card || card.extensions?.[NS]?.workshop !== session.id ||
+        sessions.some((other) => other.id !== session.id && other.cardId === card.id))
+      return null;
+
+    const [characters, chats, personas, scripts, globalBooks, linkedBooks] = await Promise.all([
+      pages((offset) => host.characters.list({ offset, limit: 100, userId })),
+      pages((offset) => host.chats.list({ offset, limit: 100, userId })),
+      pages((offset) => host.personas.list({ offset, limit: 100, userId })),
+      trackerScripts(card.id, userId, true),
+      host.world_books.getGlobal(userId),
+      Promise.all((card.world_book_ids ?? []).map((id) => host.world_books.get(id, userId))),
+    ]);
+    const sharedBooks = new Set(globalBooks);
+    for (const persona of personas) sharedBooks.add(persona.attached_world_book_id);
+    for (const character of characters) {
+      if (character.id !== card.id)
+        for (const id of character.world_book_ids ?? []) sharedBooks.add(id);
+    }
+    for (const chat of chats) {
+      if (chat.character_id !== card.id)
+        for (const id of chat.metadata?.chat_world_book_ids ?? []) sharedBooks.add(id);
+    }
+    const assets = (rows) => rows.map(({ id, name }) => ({ id, name })).sort((a, b) => a.id.localeCompare(b.id));
+    const chatIds = chats.filter((chat) => chat.character_id === card.id).map((chat) => chat.id).sort();
+    const resources = {
+      card: { id: card.id, name: card.name },
+      scripts: assets(scripts),
+      books: assets(linkedBooks.filter((book) => book?.metadata?.[NS] === card.id && !sharedBooks.has(book.id))),
+    };
+    const snapshot = JSON.stringify({ ...resources, chatIds });
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(snapshot));
+    const token = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+    return { ...resources, chatCount: chatIds.length, token };
+  }
+
   async function execute(u, req) {
     const storage = host.userStorage;
     const state = (await storage.exists(FILE, u))
@@ -404,10 +447,31 @@ export function workshop(host) {
     check(s, "Forge unavailable.");
     if (req.action === "open")
       return { session: s, overview: await cardOverview(s, u) };
+    if (req.action === "delete_preview") {
+      try {
+        return { title: s.title, rev: s.rev, plan: await deletionPlan(s, state.sessions, u) };
+      } catch {
+        return { title: s.title, rev: s.rev, plan: null, assetsUnavailable: true };
+      }
+    }
     check(
       req.rev === s.rev,
       "This forge changed. Reopen it before continuing.",
     );
+    if (req.action === "delete") {
+      let deletedCardId = null;
+      if (req.assetToken != null) {
+        const plan = await deletionPlan(s, state.sessions, u);
+        check(plan && plan.token === req.assetToken, "The linked assets changed. Reopen the confirmation to review them.");
+        for (const { id } of plan.scripts) await host.regex_scripts.delete(id, u);
+        for (const { id } of plan.books) await host.world_books.delete(id, u);
+        check(await host.characters.delete(plan.card.id, u), "Lumiverse could not delete the card.");
+        deletedCardId = plan.card.id;
+      }
+      state.sessions = state.sessions.filter((item) => item.id !== s.id);
+      await save();
+      return { sessions: index(), deletedCardId };
+    }
     let overview;
     if (req.action === "settings") {
       s.presetId = req.presetId || null;

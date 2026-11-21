@@ -130,6 +130,13 @@ export function setup(ctx) {
       color: var(--lumiverse-accent-fg, #fff);
       background: var(--lumiverse-accent, #8c70c7);
     }
+    .vv-author .vv-forge-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 8px;
+    }
+    .vv-author .vv-delete { background: #8a303a; color: #fff; border-color: transparent }
     .vv-author.vv-creation-form { padding: 0 }
     .vv-author .vv-field[hidden] { display: none }
     .vv-author .vv-heading h3 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
@@ -337,6 +344,7 @@ export function setup(ctx) {
     connection = "";
   let creationModal = null;
   let summaryModal = null;
+  let deleteModal = null;
   const summarySync = ctx.settings?.get && ctx.events?.on
     ? createSummarySync(ctx.settings)
     : null;
@@ -535,9 +543,96 @@ export function setup(ctx) {
     const create = iconButton(actions, "New forge", "M12 5v14 M5 12h14", openCreation);
     create.classList.add("vv-primary");
     create.setAttribute("aria-haspopup", "dialog");
-    for (const item of sessions)
-      button(root, item.title, () => run("open", { id: item.id }));
+    for (const item of sessions) {
+      const row = element(root, "div");
+      row.className = "vv-forge-row";
+      button(row, item.title, () => run("open", { id: item.id }));
+      const remove = iconButton(row, "Delete " + item.title,
+        "M4 7h16 M9 7V4h6v3 M6 7l1 14h10l1-14 M10 10v7 M14 10v7",
+        () => openDeletion(item));
+      remove.dataset.forgeDelete = item.id;
+      remove.setAttribute("aria-haspopup", "dialog");
+    }
     if (!sessions.length) element(root, "p", "No forges yet.");
+  }
+  async function openDeletion(item) {
+    if (busy || deleteModal) return;
+    const modal = ctx.ui.showModal({ title: "Delete forge?" });
+    deleteModal = modal;
+    modal.onDismiss(() => {
+      deleteModal = null;
+      if (!alive) return;
+      const trigger = Array.from(root.querySelectorAll("[data-forge-delete]"))
+        .find((button) => button.dataset.forgeDelete === item.id);
+      (trigger ?? root.querySelector('[aria-label="New forge"]'))?.focus();
+    });
+    const body = element(modal.root, "div");
+    body.className = "vv-author vv-creation-form";
+    const details = element(body, "div");
+    details.className = "vv-field";
+    const feedback = element(body, "p", "Checking linked assets…");
+    feedback.setAttribute("role", "status");
+    const actions = element(body, "div");
+    actions.className = "vv-actions";
+    const cancel = button(actions, "Cancel", () => modal.dismiss());
+    cancel.focus();
+    const confirm = button(actions, "Delete forge", async () => {
+      confirm.disabled = cancel.disabled = true;
+      if (includeAssets) includeAssets.disabled = true;
+      feedback.textContent = "Deleting…";
+      try {
+        const result = await rpc({
+          action: "delete", id: item.id, rev: preview.rev,
+          assetToken: includeAssets?.checked ? preview.plan.token : null,
+        });
+        sessions = result.sessions;
+        if (result.deletedCardId) {
+          library.cards = library.cards.filter((card) => card.id !== result.deletedCardId);
+          summarySync?.follow().catch(reportSummaryError);
+        }
+        if (alive) {
+          render();
+          modal.dismiss();
+        }
+      } catch (error) {
+        feedback.textContent = error.message + " Close and reopen the confirmation to retry.";
+        cancel.disabled = false;
+      }
+    });
+    confirm.classList.add("vv-delete");
+    confirm.disabled = true;
+    let preview;
+    let includeAssets;
+    try {
+      preview = await rpc({ action: "delete_preview", id: item.id });
+    } catch (error) {
+      feedback.textContent = error.message;
+      return;
+    }
+    if (deleteModal !== modal) return;
+    element(details, "strong", preview.title);
+    element(details, "p", "This permanently deletes the forge conversation and pending proposals.");
+    if (preview.plan) {
+      const label = element(details, "label", " Also delete the character card and its Forge assets");
+      includeAssets = document.createElement("input");
+      includeAssets.type = "checkbox";
+      label.prepend(includeAssets);
+      const list = element(details, "ul");
+      element(list, "li", "Character card: " + preview.plan.card.name);
+      for (const rule of preview.plan.scripts) element(list, "li", "Tracker rule: " + rule.name);
+      for (const book of preview.plan.books) element(list, "li", "Lorebook: " + book.name);
+      const count = preview.plan.chatCount;
+      element(details, "p", count
+        ? "Deleting this card also deletes " + count + (count === 1 ? " roleplay chat." : " roleplay chats.")
+        : "Deleting a card also deletes roleplay chats that use it as their primary character.");
+      includeAssets.onchange = () => {
+        confirm.textContent = includeAssets.checked ? "Delete forge and assets" : "Delete forge";
+      };
+    } else if (preview.assetsUnavailable) {
+      element(details, "p", "Could not check linked assets. You can still delete the forge entry.");
+    }
+    feedback.textContent = "";
+    confirm.disabled = false;
   }
   async function openSummarySettings() {
     if (!summarySync || summaryModal) return;
@@ -1027,6 +1122,7 @@ export function setup(ctx) {
     clearRenderedContent();
     creationModal?.dismiss();
     summaryModal?.dismiss();
+    deleteModal?.dismiss();
     removeStyle();
     tab.destroy();
   };
