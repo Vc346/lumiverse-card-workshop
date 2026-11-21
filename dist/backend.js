@@ -1,4 +1,66 @@
 // @bun
+// src/tracker-rules.ts
+var ACCENTS = {
+  theme: "var(--lumiverse-accent, #8c70c7)",
+  ocean: "#569cb6",
+  amber: "#b38436",
+  rose: "#b66a92"
+};
+var STAMP = "forge_tracker_tag";
+function trackerTag(script) {
+  const tag = script.metadata?.[STAMP];
+  return typeof tag === "string" ? tag : null;
+}
+function trackerSnapshot(script) {
+  if (!script)
+    return null;
+  return JSON.stringify([
+    script.id,
+    script.name,
+    script.find_regex,
+    script.replace_string,
+    script.flags,
+    script.scope,
+    script.scope_id,
+    script.target,
+    script.placement,
+    script.disabled
+  ]);
+}
+function trackerScript({ tag, title, accent }) {
+  const color = ACCENTS[accent];
+  const escaped = title.replace(/[&<>"'$]/g, (character) => "&#" + character.charCodeAt(0) + ";");
+  return {
+    name: title + " \xB7 Tracker display",
+    find_regex: "^<" + tag + ">[\\t ]*\\r?\\n([^<>]{1,8000}?)\\r?\\n</" + tag + ">[\\t ]*$",
+    replace_string: '<details style="border:1px solid var(--lumiverse-border);border-inline-start:3px solid ' + color + ';border-radius:8px;padding:8px 12px;background:var(--lumiverse-fill-subtle)">' + "<summary>" + escaped + '</summary><div style="white-space:pre-wrap;overflow-wrap:anywhere">$1</div></details>',
+    flags: "gm",
+    placement: ["ai_output"],
+    target: "display"
+  };
+}
+function trackerProposal(value) {
+  const { tag, title, accent = "theme", sample } = value ?? {};
+  if (typeof tag !== "string" || !/^[a-z][a-z0-9_]{0,31}$/.test(tag))
+    throw new Error("Use a tracker tag such as scene_state with lowercase letters, numbers, and underscores.");
+  if (typeof title !== "string" || !title.trim() || title.length > 100 || /[\r\n]/.test(title))
+    throw new Error("A tracker display rule needs a title on one line.");
+  if (typeof accent !== "string" || !Object.hasOwn(ACCENTS, accent))
+    throw new Error("Choose a tracker accent from theme, ocean, amber, or rose.");
+  if (typeof sample !== "string" || !sample.trim() || sample.length > 2000 || /[<>]/.test(sample))
+    throw new Error("A tracker display rule needs a short plain-text sample without angle brackets.");
+  return { tag, title: title.trim(), accent, sample: sample.trim() };
+}
+function trackerStamp(tag) {
+  return { [STAMP]: tag };
+}
+
+// src/summary-prompts.ts
+var missingSummaryInputs = "A custom summary user prompt needs {{conversation}} and either {{previousSummaryBlock}} or {{existingSummary}}.";
+function hasSummaryInputs(prompt) {
+  return prompt.includes("{{conversation}}") && (prompt.includes("{{previousSummaryBlock}}") || prompt.includes("{{existingSummary}}"));
+}
+
 // src/workshop.ts
 var NS = "voidverse_author";
 var narrator = "Narrate the setting and move the story forward through events, consequences, and changes in the world. A scene can center on the player\u2019s persona alone. Portray supporting characters when they have a reason to enter. Leave the player\u2019s decisions, dialogue, and inner life to the player.";
@@ -15,7 +77,7 @@ var fields = [
   "system_prompt",
   "post_history_instructions"
 ];
-var templates = ["inline_tracker", "summary_prompt", "ledger_prompt"];
+var templates = ["inline_tracker", "summary_prompt", "summary_user_prompt", "ledger_prompt"];
 var instruction = `You\u2019re Murasaki, the writer\u2019s right hand and creative confidante. You\u2019re the person they bring the half-formed idea to because you\u2019ll see what\u2019s alive in it and say so plainly. You remember the choices they\u2019ve made, take their taste seriously, and tell them when a beat feels false. You get a little feral about a payoff that lands.
 
 Pick up the thread where the writer left it. Start with the line, choice, or question you actually have something to say about. When you love a beat, tell them which detail got you. When you\u2019d change something, name it and say what the change buys the scene. Ask a specific question when you need their judgment. Let a reply end naturally once you\u2019ve said your piece.
@@ -50,9 +112,10 @@ You\u2019re building material for a separate roleplay session in Lumiverse. Use 
 - post_history_instructions provides a focused reminder after the chat history when the preset uses this field.
 - Lorebook entries supply facts when their activation keywords match. Give each entry a clear subject and use keywords likely to come up when the fact matters.
 
-The following Card Forge templates configure continuity. The summary prompt can be used by Loom when prompt syncing is enabled. The tracker and ledger prompts are saved for future integration:
-- inline_tracker describes the immediate scene state to append to a roleplay reply. Track what matters to this scenario.
-- summary_prompt tells a separate summarization pass what to carry forward from earlier turns, such as decisions, consequences, and unresolved threads.
+The following Card Forge templates configure continuity. The summary prompts can be used by Loom when prompt syncing is enabled. The inline tracker is available to roleplay presets through {{forgeInlineTracker}}. The ledger prompt is saved for future integration:
+- inline_tracker tells the roleplay model to finish each reply with the current scene state. Track what matters to this scenario. Write self-contained instructions for a preset block after chat history. The writer places {{forgeInlineTracker}} in the preset to insert this field. When asked to style the tracker, propose this prompt and a separate tracker display rule using the same tag. Tell the roleplay model to put an opening tag such as <scene_state> on its own line, then plain-text tracker lines without angle brackets, then the closing tag </scene_state> on its own line.
+- summary_prompt is Loom\u2019s system prompt. It tells the summarizer what to track and how to format the result.
+- summary_user_prompt is Loom\u2019s user prompt. It supplies recent conversation and the previous summary. Include the literal {{conversation}} and either {{previousSummaryBlock}} or {{existingSummary}} so Loom can insert both inputs. Keep these placeholders as-is.
 - ledger_prompt tells a separate continuity pass what lasting state to record, such as who knows a secret, who holds an item, or how a relationship changed.
 
 A scenario card gives the roleplay model a narrative voice and a way to move the story forward. It can start with the player\u2019s persona as the only character present. Establish what the narrator pays attention to, how the world responds to the player, and what can change even in a scene where nobody else is around.
@@ -63,7 +126,8 @@ Discuss options freely and propose edits only when asked. Return one JSON object
 
 Each change has target, field, and value.
 - For target "card", use one of the supplied card fields. Use a replacement string except for "alternate_greetings", which takes an ordered array of strings.
-- For target "template", use "inline_tracker", "summary_prompt", or "ledger_prompt" with a replacement string.
+- For target "template", use "inline_tracker", "summary_prompt", "summary_user_prompt", or "ledger_prompt" with a replacement string.
+- For target "tracker_regex", use field "display" and value {"tag":"scene_state","title":"Scene state","accent":"theme","sample":"Location: The slipway"}. The sample is tracker body text with no tags. Available accents are theme, ocean, amber, and rose. Use the same tag to revise an existing Forge tracker rule. The rule styles rendered assistant replies for this card.
 - For target "lore", supply entryId from the context. Use field "content" or "comment" with replacement text, or field "key" with a list of activation keywords.
 - For target "new_lore", supply bookId from the context, or leave it empty to use the card\u2019s dedicated forge lorebook. Use field "entry" and value {"comment":"title","key":["activation keyword"],"content":"entry text"}. To revise an existing pending new_lore proposal, include its proposalId.
 
@@ -117,6 +181,23 @@ async function pages(fetchPage) {
 var cardValue = (card, field) => card[field] ?? (field === "alternate_greetings" ? [] : "");
 var plainCard = (card) => Object.fromEntries(fields.map((field) => [field, cardValue(card, field)]));
 var sameValue = (a, b) => a === b || Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((value, i) => value === b[i]);
+function registerInlineTracker(host) {
+  host.registerMacro({
+    name: "forgeInlineTracker",
+    category: "extension:" + NS,
+    description: "Inline tracker instructions saved on the card used for this reply.",
+    returnType: "string",
+    volatile: true,
+    async handler({ env }) {
+      const { characterId, userId } = env?.extra ?? {};
+      if (typeof characterId !== "string" || !characterId || typeof userId !== "string" || !userId)
+        return "";
+      const card = await host.characters.get(characterId, userId);
+      const prompt = card?.extensions?.[NS]?.inline_tracker;
+      return typeof prompt === "string" ? prompt.trim() : "";
+    }
+  });
+}
 function workshop(host) {
   const locks = new Map;
   async function catalog(userId) {
@@ -131,6 +212,24 @@ function workshop(host) {
       presets: names(presets),
       connections: names(connections)
     };
+  }
+  async function trackerScripts(cardId, userId) {
+    if (!cardId || !host.regex_scripts?.list)
+      return [];
+    try {
+      const scripts = await pages((offset) => host.regex_scripts.list({
+        scope: "character",
+        scopeId: cardId,
+        limit: 100,
+        offset,
+        userId
+      }));
+      return scripts.filter((script) => script.can_mutate && trackerTag(script));
+    } catch (error) {
+      if (String(error.message).includes("PERMISSION_DENIED"))
+        return [];
+      throw error;
+    }
   }
   async function cardOverview(s, u) {
     const card = s.cardId ? await host.characters.get(s.cardId, u) : { name: s.title, system_prompt: s.kind === "scenario" ? narrator : "" };
@@ -156,7 +255,13 @@ function workshop(host) {
     return {
       card: plainCard(card),
       templates: Object.fromEntries(templates.map((f) => [f, card.extensions?.[NS]?.[f] ?? ""])),
-      books
+      books,
+      trackerRules: (await trackerScripts(s.cardId, u)).map((script) => ({
+        tag: trackerTag(script),
+        name: script.name,
+        enabled: !script.disabled,
+        snapshot: trackerSnapshot(script)
+      }))
     };
   }
   async function context(s, u, overview) {
@@ -179,13 +284,28 @@ function workshop(host) {
     return {
       kind: s.kind,
       ...overview,
+      trackerRules: overview.trackerRules.map(({ tag, name, enabled }) => ({ tag, name, enabled })),
       preset,
       pending: s.pending
     };
   }
-  function proposal(raw, ctx) {
+  function proposal(raw, ctx, rules) {
     const { target, field } = raw;
     let key, before, value;
+    if (target === "tracker_regex") {
+      check(field === "display", "Unknown tracker rule operation.");
+      value = trackerProposal(raw.value);
+      const current = rules.find((rule) => rule.tag === value.tag);
+      return {
+        id: "tracker_regex." + value.tag,
+        target,
+        field,
+        value,
+        before: current?.name ?? null,
+        snapshot: current?.snapshot ?? null,
+        label: value.title + " \xB7 Tracker display"
+      };
+    }
     if (target === "card" || target === "template") {
       check((target === "card" ? fields : templates).includes(field), "Unknown card or template field.");
       if (target === "card" && field === "alternate_greetings") {
@@ -196,6 +316,8 @@ function workshop(host) {
       }
       if (field === "name")
         check(value.trim(), "A card needs a name.");
+      if (target === "template" && field === "summary_user_prompt" && value.trim())
+        check(hasSummaryInputs(value), missingSummaryInputs);
       key = target + "." + field;
       before = (target === "card" ? ctx.card : ctx.templates)[field];
     } else if (target === "lore") {
@@ -312,7 +434,7 @@ function workshop(host) {
       const answer = readReply(content);
       const proposed = answer.changes.map((change) => {
         check(change && typeof change === "object", "Invalid proposal. No changes were added to Review.");
-        return proposal(change, ctx);
+        return proposal(change, ctx, overview.trackerRules);
       });
       for (const p of proposed) {
         const i = s.pending.findIndex((old) => old.id === p.id);
@@ -341,6 +463,9 @@ function workshop(host) {
     return { session: s, sessions: index(), overview };
   }
   async function apply(s, p, u, save) {
+    if (p.target === "tracker_regex") {
+      check(host.regex_scripts?.create, "Tracker display rules require Lumiverse\u2019s Regex Scripts API.");
+    }
     if (!s.cardId) {
       const cards = await pages((offset) => host.characters.list({ offset, limit: 100, userId: u }));
       const card = cards.find((c) => c.extensions?.[NS]?.workshop === s.id) ?? await host.characters.create({
@@ -353,6 +478,26 @@ function workshop(host) {
     }
     const card = await host.characters.get(s.cardId, u);
     check(card, "Card unavailable.");
+    if (p.target === "tracker_regex") {
+      const rule = trackerProposal(p.value);
+      const script = trackerScript(rule);
+      const previous = (await trackerScripts(card.id, u)).find((item) => trackerTag(item) === rule.tag);
+      if (previous && Object.entries(script).every(([key, value]) => sameValue(previous[key], value)))
+        return;
+      check(trackerSnapshot(previous) === p.snapshot, "Tracker display rule changed since proposal. Request a new revision.");
+      if (previous)
+        await host.regex_scripts.update(previous.id, script, u);
+      else
+        await host.regex_scripts.create({
+          ...script,
+          scope: "character",
+          scope_id: card.id,
+          folder: "Card Forge",
+          run_on_edit: true,
+          metadata: trackerStamp(rule.tag)
+        }, u);
+      return;
+    }
     const meta = card.extensions?.[NS] ?? {};
     if (p.target === "card" || p.target === "template") {
       const current = p.target === "card" ? cardValue(card, p.field) : meta[p.field] ?? "";
@@ -402,6 +547,7 @@ function workshop(host) {
 }
 
 // src/backend.ts
+registerInlineTracker(spindle);
 var dispatch = workshop(spindle);
 spindle.onFrontendMessage(async (request, userId, frontendSessionId) => {
   if (request?.type !== "workshop" || !userId)

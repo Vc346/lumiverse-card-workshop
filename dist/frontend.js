@@ -5284,9 +5284,35 @@ _defineProperty(MarkdownIt, "ParserInline", ParserInline);
 _defineProperty(MarkdownIt, "StateInline", StateInline);
 var MarkdownItCallable = callable(MarkdownIt);
 
+// src/tracker-rules.ts
+var ACCENTS = {
+  theme: "var(--lumiverse-accent, #8c70c7)",
+  ocean: "#569cb6",
+  amber: "#b38436",
+  rose: "#b66a92"
+};
+function trackerScript({ tag, title, accent }) {
+  const color = ACCENTS[accent];
+  const escaped = title.replace(/[&<>"'$]/g, (character) => "&#" + character.charCodeAt(0) + ";");
+  return {
+    name: title + " · Tracker display",
+    find_regex: "^<" + tag + ">[\\t ]*\\r?\\n([^<>]{1,8000}?)\\r?\\n</" + tag + ">[\\t ]*$",
+    replace_string: '<details style="border:1px solid var(--lumiverse-border);border-inline-start:3px solid ' + color + ';border-radius:8px;padding:8px 12px;background:var(--lumiverse-fill-subtle)">' + "<summary>" + escaped + '</summary><div style="white-space:pre-wrap;overflow-wrap:anywhere">$1</div></details>',
+    flags: "gm",
+    placement: ["ai_output"],
+    target: "display"
+  };
+}
+
+// src/summary-prompts.ts
+var missingSummaryInputs = "A custom summary user prompt needs {{conversation}} and either {{previousSummaryBlock}} or {{existingSummary}}.";
+function hasSummaryInputs(prompt) {
+  return prompt.includes("{{conversation}}") && (prompt.includes("{{previousSummaryBlock}}") || prompt.includes("{{existingSummary}}"));
+}
+
 // src/summary-sync.ts
 var CONFIG_KEY = "summary:prompt_sync";
-var defaults = { enabled: false, fallback: "", original: null };
+var defaults = { enabled: false, fallback: "", fallbackUser: "", original: null };
 async function request(path, options = {}) {
   const response = await fetch("/api/v1/" + path, {
     credentials: "same-origin",
@@ -5314,15 +5340,18 @@ function createSummarySync(settings, api = request) {
   async function load() {
     return { ...defaults, ...await settings.get(CONFIG_KEY) };
   }
-  async function writePrompt(prompt, current = () => !disposed) {
-    const row = await api("settings/summarization");
-    const value = row?.value ?? {};
-    if (!current() || (value.systemPromptOverride ?? null) === prompt)
+  async function readLoom() {
+    return (await api("settings/summarization"))?.value ?? {};
+  }
+  async function writePrompts(value, systemPrompt, userPrompt, current = () => !disposed) {
+    if (!current() || (value.systemPromptOverride ?? null) === systemPrompt && (value.userPromptOverride ?? null) === userPrompt)
       return;
     await api("settings/summarization", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ value: { ...value, systemPromptOverride: prompt } })
+      body: JSON.stringify({
+        value: { ...value, systemPromptOverride: systemPrompt, userPromptOverride: userPrompt }
+      })
     });
   }
   function follow(chatId) {
@@ -5335,33 +5364,53 @@ function createSummarySync(settings, api = request) {
       if (!config.enabled || !current())
         return;
       const id = chatId === undefined ? (await api("settings/activeChatId"))?.value : chatId;
-      let prompt = usablePrompt(config.fallback);
+      let systemPrompt = usablePrompt(config.fallback);
+      let userPrompt = usablePrompt(config.fallbackUser);
       if (typeof id === "string" && id && current()) {
         const chat = await api("chats/" + encodeURIComponent(id) + "?messages=false");
         if (chat?.character_id && current()) {
           const card = await api("characters/" + encodeURIComponent(chat.character_id));
-          prompt = usablePrompt(card?.extensions?.voidverse_author?.summary_prompt) ?? prompt;
+          const templates = card?.extensions?.voidverse_author;
+          systemPrompt = usablePrompt(templates?.summary_prompt) ?? systemPrompt;
+          const customUserPrompt = usablePrompt(templates?.summary_user_prompt);
+          if (customUserPrompt && hasSummaryInputs(customUserPrompt))
+            userPrompt = customUserPrompt;
         }
       }
-      if (current())
-        await writePrompt(prompt, current);
+      if (!current())
+        return;
+      const loom = await readLoom();
+      if (!current())
+        return;
+      if (config.originalUser === undefined) {
+        config.originalUser = loom.userPromptOverride ?? null;
+        await settings.set(CONFIG_KEY, config);
+      }
+      await writePrompts(loom, systemPrompt, userPrompt ?? config.originalUser, current);
     });
   }
-  async function save(enabled, fallback) {
+  async function save(enabled, fallback, fallbackUser = "") {
+    if (fallbackUser.trim() && !hasSummaryInputs(fallbackUser))
+      throw new Error(missingSummaryInputs);
     await enqueue(async () => {
       if (disposed)
         return;
       const previous = await load();
       let original = previous.original;
+      let originalUser = previous.originalUser;
       if (enabled && !previous.enabled) {
-        const row = await api("settings/summarization");
-        original = row?.value?.systemPromptOverride ?? null;
+        const loom = await readLoom();
+        original = loom.systemPromptOverride ?? null;
+        originalUser = loom.userPromptOverride ?? null;
       } else if (!enabled && previous.enabled) {
-        await writePrompt(original);
+        const loom = await readLoom();
+        const userPrompt = originalUser === undefined ? loom.userPromptOverride ?? null : originalUser;
+        await writePrompts(loom, original, userPrompt);
         original = null;
+        originalUser = null;
       }
       if (!disposed)
-        await settings.set(CONFIG_KEY, { enabled, fallback, original });
+        await settings.set(CONFIG_KEY, { enabled, fallback, fallbackUser, original, originalUser });
     });
     if (enabled)
       await follow();
@@ -5392,7 +5441,8 @@ var fieldLabels = {
   system_prompt: "System prompt",
   post_history_instructions: "Post-history instructions",
   inline_tracker: "Inline tracker prompt",
-  summary_prompt: "Summary prompt",
+  summary_prompt: "Summary system prompt",
+  summary_user_prompt: "Summary user prompt",
   ledger_prompt: "Ledger prompt"
 };
 var loreFieldLabels = { content: "Entry text", comment: "Entry title", key: "Activation keywords" };
@@ -5900,13 +5950,18 @@ function setup(ctx) {
     const enabled = document.createElement("input");
     enabled.type = "checkbox";
     toggleLabel.prepend(enabled);
-    const fallbackLabel = element(form, "label", "Generic summary prompt");
-    fallbackLabel.className = "vv-field";
-    const fallback = element(fallbackLabel, "textarea");
-    fallback.className = "vv-input";
-    fallback.rows = 5;
-    fallback.maxLength = 1e5;
-    element(form, "p", "Used when a card has no summary prompt. Leave blank to use Loom’s default. Loom shares one override across tabs.");
+    function promptField(title) {
+      const label = element(form, "label", title);
+      label.className = "vv-field";
+      const input = element(label, "textarea");
+      input.className = "vv-input";
+      input.rows = 4;
+      input.maxLength = 1e5;
+      return input;
+    }
+    const fallback = promptField("Generic summary system prompt");
+    const fallbackUser = promptField("Generic summary user prompt");
+    element(form, "p", "Used when a card has no matching prompt. Leave the system prompt blank for Loom’s default, or the user prompt blank to keep your original Loom template. Loom shares these overrides across tabs.");
     const feedback = element(form, "p", "Loading…");
     feedback.className = "vv-status";
     feedback.setAttribute("role", "status");
@@ -5915,31 +5970,41 @@ function setup(ctx) {
     const cancel = button(actions, "Cancel", () => modal.dismiss());
     const submit = button(actions, "Save", null, true);
     submit.type = "submit";
-    enabled.disabled = fallback.disabled = submit.disabled = true;
+    const controls = [enabled, fallback, fallbackUser, submit];
+    const setBusy = (busy) => controls.forEach((control) => control.disabled = busy);
+    setBusy(true);
     try {
       const config = await summarySync.load();
       if (summaryModal !== modal)
         return;
       enabled.checked = config.enabled;
       fallback.value = config.fallback;
+      fallbackUser.value = config.fallbackUser;
       feedback.textContent = "";
-      enabled.disabled = fallback.disabled = submit.disabled = false;
+      setBusy(false);
     } catch {
       feedback.textContent = "Could not load summary settings. Close and try again.";
       return;
     }
     form.onsubmit = async (event) => {
       event.preventDefault();
-      enabled.disabled = fallback.disabled = cancel.disabled = submit.disabled = true;
+      if (fallbackUser.value.trim() && !hasSummaryInputs(fallbackUser.value)) {
+        feedback.textContent = missingSummaryInputs;
+        fallbackUser.focus();
+        return;
+      }
+      setBusy(true);
+      cancel.disabled = true;
       feedback.textContent = "Saving…";
       try {
-        await summarySync.save(enabled.checked, fallback.value);
+        await summarySync.save(enabled.checked, fallback.value, fallbackUser.value);
         if (summaryModal === modal)
           modal.dismiss();
       } catch (error) {
         reportSummaryError(error);
         feedback.textContent = "Could not finish syncing with Loom. Try saving again.";
-        enabled.disabled = fallback.disabled = cancel.disabled = submit.disabled = false;
+        setBusy(false);
+        cancel.disabled = false;
       }
     };
   }
@@ -6188,6 +6253,14 @@ function setup(ctx) {
         displayValue(details, value);
       }
     }
+    if (overview.trackerRules?.length) {
+      element(section, "strong", "Tracker display rules");
+      for (const rule of overview.trackerRules) {
+        const label = rule.name + (rule.enabled ? " · Enabled" : " · Disabled");
+        const details = disclosure(section, "tracker:" + rule.tag, label);
+        displayValue(details, "<" + rule.tag + "> · AI replies · Display only");
+      }
+    }
     element(section, "strong", "Lorebooks");
     const drafts = session.pending.filter((p) => p.target === "new_lore");
     if (!books.length)
@@ -6242,6 +6315,10 @@ function setup(ctx) {
         element(details, "strong", "Current value");
         displayValue(details, p.before);
       }
+      if (p.target === "tracker_regex") {
+        trackerReview(details, p.value);
+        continue;
+      }
       element(details, "strong", "Proposed value");
       displayValue(details, p.target === "new_lore" ? p.value.key.join(", ") + `
 ` + p.value.content : p.value);
@@ -6254,8 +6331,28 @@ function setup(ctx) {
     ])
       button(actions, label, () => run("review", { decision, ids: [...selected] }), decision === "apply");
   }
-  function clearMarkdown() {
-    for (const message of root.querySelectorAll(".vv-markdown"))
+  function trackerReview(details, rule) {
+    const script = trackerScript(rule);
+    const sample = "<" + rule.tag + `>
+` + rule.sample + `
+</` + rule.tag + ">";
+    const example = `The scene continues.
+
+` + sample;
+    element(details, "p", "AI replies · This card · Display only");
+    element(details, "strong", "Sample reply");
+    displayValue(details, example);
+    element(details, "strong", "Display preview");
+    element(details, "p", "The scene continues.");
+    const result = sample.replace(new RegExp(script.find_regex, script.flags), script.replace_string);
+    const preview = ctx.dom.inject(details, result);
+    preview.classList.add("vv-tracker-preview");
+    const regex = disclosure(details, "tracker-pattern:" + rule.tag, "Regex and replacement");
+    displayValue(regex, "/" + script.find_regex + "/" + script.flags);
+    displayValue(regex, script.replace_string);
+  }
+  function clearRenderedContent() {
+    for (const message of root.querySelectorAll(".vv-markdown, .vv-tracker-preview"))
       ctx.dom.uninject(message);
   }
   function showStatus(parent) {
@@ -6280,7 +6377,7 @@ function setup(ctx) {
     root.dataset.session = scope;
     root.classList.toggle("vv-editor", Boolean(session));
     destroyComponents();
-    clearMarkdown();
+    clearRenderedContent();
     root.replaceChildren();
     if (library) {
       if (session) {
@@ -6318,7 +6415,7 @@ function setup(ctx) {
     for (const finish of waiting.values())
       finish({ error: "Forge closed" });
     destroyComponents();
-    clearMarkdown();
+    clearRenderedContent();
     creationModal?.dismiss();
     summaryModal?.dismiss();
     removeStyle();

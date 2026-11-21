@@ -1,5 +1,7 @@
 import MarkdownIt from "markdown-it";
+import { trackerScript } from "./tracker-rules";
 import { createSummarySync } from "./summary-sync";
+import { hasSummaryInputs, missingSummaryInputs } from "./summary-prompts";
 
 const markdown = new MarkdownIt({ html: false, breaks: true });
 markdown.validateLink = (url) => /^(https?:\/\/|mailto:)/i.test(url);
@@ -19,7 +21,8 @@ const fieldLabels = {
   system_prompt: "System prompt",
   post_history_instructions: "Post-history instructions",
   inline_tracker: "Inline tracker prompt",
-  summary_prompt: "Summary prompt",
+  summary_prompt: "Summary system prompt",
+  summary_user_prompt: "Summary user prompt",
   ledger_prompt: "Ledger prompt",
 };
 
@@ -551,13 +554,18 @@ export function setup(ctx) {
     const enabled = document.createElement("input");
     enabled.type = "checkbox";
     toggleLabel.prepend(enabled);
-    const fallbackLabel = element(form, "label", "Generic summary prompt");
-    fallbackLabel.className = "vv-field";
-    const fallback = element(fallbackLabel, "textarea");
-    fallback.className = "vv-input";
-    fallback.rows = 5;
-    fallback.maxLength = 100000;
-    element(form, "p", "Used when a card has no summary prompt. Leave blank to use Loom’s default. Loom shares one override across tabs.");
+    function promptField(title) {
+      const label = element(form, "label", title);
+      label.className = "vv-field";
+      const input = element(label, "textarea");
+      input.className = "vv-input";
+      input.rows = 4;
+      input.maxLength = 100000;
+      return input;
+    }
+    const fallback = promptField("Generic summary system prompt");
+    const fallbackUser = promptField("Generic summary user prompt");
+    element(form, "p", "Used when a card has no matching prompt. Leave the system prompt blank for Loom’s default, or the user prompt blank to keep your original Loom template. Loom shares these overrides across tabs.");
     const feedback = element(form, "p", "Loading…");
     feedback.className = "vv-status";
     feedback.setAttribute("role", "status");
@@ -566,29 +574,39 @@ export function setup(ctx) {
     const cancel = button(actions, "Cancel", () => modal.dismiss());
     const submit = button(actions, "Save", null, true);
     submit.type = "submit";
-    enabled.disabled = fallback.disabled = submit.disabled = true;
+    const controls = [enabled, fallback, fallbackUser, submit];
+    const setBusy = (busy) => controls.forEach((control) => (control.disabled = busy));
+    setBusy(true);
     try {
       const config = await summarySync.load();
       if (summaryModal !== modal) return;
       enabled.checked = config.enabled;
       fallback.value = config.fallback;
+      fallbackUser.value = config.fallbackUser;
       feedback.textContent = "";
-      enabled.disabled = fallback.disabled = submit.disabled = false;
+      setBusy(false);
     } catch {
       feedback.textContent = "Could not load summary settings. Close and try again.";
       return;
     }
     form.onsubmit = async (event) => {
       event.preventDefault();
-      enabled.disabled = fallback.disabled = cancel.disabled = submit.disabled = true;
+      if (fallbackUser.value.trim() && !hasSummaryInputs(fallbackUser.value)) {
+        feedback.textContent = missingSummaryInputs;
+        fallbackUser.focus();
+        return;
+      }
+      setBusy(true);
+      cancel.disabled = true;
       feedback.textContent = "Saving…";
       try {
-        await summarySync.save(enabled.checked, fallback.value);
+        await summarySync.save(enabled.checked, fallback.value, fallbackUser.value);
         if (summaryModal === modal) modal.dismiss();
       } catch (error) {
         reportSummaryError(error);
         feedback.textContent = "Could not finish syncing with Loom. Try saving again.";
-        enabled.disabled = fallback.disabled = cancel.disabled = submit.disabled = false;
+        setBusy(false);
+        cancel.disabled = false;
       }
     };
   }
@@ -844,6 +862,14 @@ export function setup(ctx) {
         displayValue(details, value);
       }
     }
+    if (overview.trackerRules?.length) {
+      element(section, "strong", "Tracker display rules");
+      for (const rule of overview.trackerRules) {
+        const label = rule.name + (rule.enabled ? " · Enabled" : " · Disabled");
+        const details = disclosure(section, "tracker:" + rule.tag, label);
+        displayValue(details, "<" + rule.tag + "> · AI replies · Display only");
+      }
+    }
     element(section, "strong", "Lorebooks");
     const drafts = session.pending.filter((p) => p.target === "new_lore");
     if (!books.length)
@@ -901,6 +927,10 @@ export function setup(ctx) {
         element(details, "strong", "Current value");
         displayValue(details, p.before);
       }
+      if (p.target === "tracker_regex") {
+        trackerReview(details, p.value);
+        continue;
+      }
       element(details, "strong", "Proposed value");
       displayValue(
         details,
@@ -915,8 +945,24 @@ export function setup(ctx) {
     ])
       button(actions, label, () => run("review", { decision, ids: [...selected] }), decision === "apply");
   }
-  function clearMarkdown() {
-    for (const message of root.querySelectorAll(".vv-markdown")) ctx.dom.uninject(message);
+  function trackerReview(details, rule) {
+    const script = trackerScript(rule);
+    const sample = "<" + rule.tag + ">\n" + rule.sample + "\n</" + rule.tag + ">";
+    const example = "The scene continues.\n\n" + sample;
+    element(details, "p", "AI replies · This card · Display only");
+    element(details, "strong", "Sample reply");
+    displayValue(details, example);
+    element(details, "strong", "Display preview");
+    element(details, "p", "The scene continues.");
+    const result = sample.replace(new RegExp(script.find_regex, script.flags), script.replace_string);
+    const preview = ctx.dom.inject(details, result);
+    preview.classList.add("vv-tracker-preview");
+    const regex = disclosure(details, "tracker-pattern:" + rule.tag, "Regex and replacement");
+    displayValue(regex, "/" + script.find_regex + "/" + script.flags);
+    displayValue(regex, script.replace_string);
+  }
+  function clearRenderedContent() {
+    for (const message of root.querySelectorAll(".vv-markdown, .vv-tracker-preview")) ctx.dom.uninject(message);
   }
   function showStatus(parent) {
     const line = element(parent, "p", status);
@@ -942,7 +988,7 @@ export function setup(ctx) {
     root.dataset.session = scope;
     root.classList.toggle("vv-editor", Boolean(session));
     destroyComponents();
-    clearMarkdown();
+    clearRenderedContent();
     root.replaceChildren();
     if (library) {
       if (session) {
@@ -978,7 +1024,7 @@ export function setup(ctx) {
     window.cancelAnimationFrame(viewportFrame);
     for (const finish of waiting.values()) finish({ error: "Forge closed" });
     destroyComponents();
-    clearMarkdown();
+    clearRenderedContent();
     creationModal?.dismiss();
     summaryModal?.dismiss();
     removeStyle();

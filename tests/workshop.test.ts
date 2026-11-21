@@ -1,11 +1,12 @@
 import { test, expect } from "bun:test";
-import { workshop } from "../src/workshop";
+import { registerInlineTracker, workshop } from "../src/workshop";
 
 function fixture() {
   const data = new Map(),
     cards = [],
     books = [],
     entries = [],
+    scripts = [],
     calls = [];
   let answer;
   function collection(list) {
@@ -26,6 +27,14 @@ function fixture() {
   }
   const host = {
     characters: collection(cards),
+    regex_scripts: {
+      ...collection(scripts),
+      list: async ({ scope, scopeId }) => {
+        const data = scripts.filter((script) => script.scope === scope && script.scope_id === scopeId);
+        return { data: structuredClone(data), total: data.length };
+      },
+      create: async (body) => collection(scripts).create({ ...body, can_mutate: true }),
+    },
     world_books: {
       ...collection(books),
       entries: {
@@ -72,6 +81,7 @@ function fixture() {
     cards,
     books,
     entries,
+    scripts,
     calls,
     respond: (value) => (answer = value),
   };
@@ -242,4 +252,103 @@ test("fenced proposals with surrounding prose reach Review without exposing JSON
     decision: "apply", ids: [reopened.pending[0].id],
   });
   expect(f.entries[0].content).toBe(entry.content);
+});
+
+test("requires both Loom inputs before saving a proposed summary user prompt", async () => {
+  const f = fixture();
+  const run = workshop(f.host);
+  const { session } = await run("alice", { action: "start", title: "Slipway" });
+  const talk = (value) => {
+    f.respond({
+      reply: "Here is a template.",
+      changes: [{ target: "template", field: "summary_user_prompt", value }],
+    });
+    return run("alice", { action: "talk", id: session.id, rev: session.rev, text: "Draft the user prompt." });
+  };
+  await expect(talk("Read {{existingSummary}}.")).rejects.toThrow("{{conversation}}");
+  const value = "{{existingSummary}}\nUpdate from these events:\n{{conversation}}";
+  const { session: proposed } = await talk(value);
+  const { overview } = await run("alice", {
+    action: "review", id: proposed.id, rev: proposed.rev,
+    decision: "apply", ids: [proposed.pending[0].id],
+  });
+  expect(overview.templates.summary_user_prompt).toBe(value);
+});
+
+test("approves and revises passive tracker regex for just the active card", async () => {
+  const f = fixture();
+  const run = workshop(f.host);
+  let { session } = await run("alice", { action: "start", title: "Slipway" });
+  const change = {
+    target: "tracker_regex", field: "display",
+    value: { tag: "scene_state", title: "Tide $1 & weather", accent: "ocean", sample: "Tide: falling" },
+  };
+  async function propose(title = change.value.title) {
+    f.respond({ reply: "Here is the display rule.", changes: [
+      { ...change, value: { ...change.value, title } },
+    ] });
+    session = (await run("alice", {
+      action: "talk", id: session.id, rev: session.rev, text: "Style this tracker.",
+    })).session;
+  }
+  async function apply() {
+    const result = await run("alice", {
+      action: "review", id: session.id, rev: session.rev,
+      decision: "apply", ids: [session.pending[0].id],
+    });
+    session = result.session;
+    return result.overview;
+  }
+  await propose();
+  expect(f.scripts).toHaveLength(0);
+  const overview = await apply();
+  expect(overview.trackerRules[0].tag).toBe("scene_state");
+  expect(f.scripts[0]).toMatchObject({
+    scope: "character", scope_id: session.cardId, target: "display", placement: ["ai_output"],
+  });
+  const { find_regex, flags, replace_string } = f.scripts[0];
+  const sample = "The hull creaks.\n<scene_state>\nTide: falling\n</scene_state>\nShe turns.";
+  const output = sample.replace(new RegExp(find_regex, flags), replace_string);
+  expect(output).toContain("The hull creaks.\n<details");
+  expect(output).toContain("Tide &#36;1 &#38; weather");
+  expect(output).toContain("Tide: falling</div></details>\nShe turns.");
+  expect("<scene_state>\n<script>\n</scene_state>".replace(new RegExp(find_regex, flags), replace_string))
+    .toBe("<scene_state>\n<script>\n</scene_state>");
+  await propose("New tracker title");
+  await apply();
+  expect(f.scripts).toHaveLength(1);
+  expect(f.scripts[0].name).toBe("New tracker title · Tracker display");
+  await propose("Another title");
+  f.scripts[0].replace_string = "Manual edit";
+  await expect(apply()).rejects.toThrow("changed since proposal");
+  expect(f.scripts[0].replace_string).toBe("Manual edit");
+});
+
+test("the inline tracker macro resolves the card and user from each generation", async () => {
+  let macro;
+  const calls = [];
+  const tracker = new Map([
+    ["alice/card-a", "Track {{user}}’s location."],
+    ["alice/card-b", "Track the tide."],
+    ["bob/card-a", "Track the time."],
+  ]);
+  registerInlineTracker({
+    registerMacro: (definition) => { macro = definition; },
+    characters: {
+      get: async (id, userId) => {
+        calls.push([id, userId]);
+        return { extensions: { voidverse_author: { inline_tracker: tracker.get(userId + "/" + id) } } };
+      },
+    },
+  });
+  const resolve = (characterId, userId) => macro.handler({ env: { extra: { characterId, userId } } });
+  expect(macro.name).toBe("forgeInlineTracker");
+  expect(await resolve("card-a", "alice")).toBe("Track {{user}}’s location.");
+  expect(await resolve("card-b", "alice")).toBe("Track the tide.");
+  expect(await resolve("card-a", "bob")).toBe("Track the time.");
+  tracker.set("alice/card-a", "Track the ferry schedule.");
+  expect(await resolve("card-a", "alice")).toBe("Track the ferry schedule.");
+  expect(await resolve("card-empty", "alice")).toBe("");
+  expect(await resolve("card-a", undefined)).toBe("");
+  expect(calls).toHaveLength(5);
 });

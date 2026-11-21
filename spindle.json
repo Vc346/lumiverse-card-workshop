@@ -1,12 +1,12 @@
 {
   "identifier": "voidverse_author",
   "name": "Card Forge",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "author": "VoidVerse",
   "github": "https://github.com/Vc346/lumiverse-card-workshop",
   "homepage": "https://github.com/Vc346/lumiverse-card-workshop",
   "description": "Develop original characters, scenarios and their lore through conversation.",
-  "permissions": ["generation", "characters", "world_books", "presets"],
+  "permissions": ["generation", "characters", "world_books", "presets", "regex_scripts"],
   "entry_backend": "dist/backend.js",
   "entry_frontend": "dist/frontend.js"
 }

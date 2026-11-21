@@ -22,17 +22,23 @@ Open **Card & lore** to see which card fields and forge prompts are saved, empty
 
 Expand a linked lorebook to see its entries and activation keywords. To create an entry, ask Murasaki to draft one and name a linked lorebook if you have a specific destination. Approve it in **Review**. If you leave the destination up to Murasaki, it can use a dedicated lorebook that the extension creates and attaches on approval.
 
+## Use an inline tracker
+
+Ask Murasaki for an inline tracker and a matching display rule. In **Review**, expand the rule to see a sample reply, its collapsible preview, and the regex. Applying saves a native character-scoped rule for AI replies. It formats the tagged tracker block on display and leaves the stored reply intact. Forge can revise its own rule when you ask it to use the same tag. Grant **Regex Scripts** permission in Spindle to apply rules.
+
+Add `{{forgeInlineTracker}}` to a system prompt block **after Chat History** in your Lumiverse preset. The macro inserts the inline tracker saved on the card used for that reply. It expands to empty text for cards with a blank tracker. The roleplay model can then emit the tagged block for the display rule to format. If you already pasted the same instructions into Post-History Instructions, keep one copy so you only send them once.
+
 ## Use a card’s summary prompt in Loom
 
-From **Forges**, open **Loom summary prompts**, enable chat switching, and enter a generic prompt. Card Forge uses the active chat’s card prompt when one is saved. Cards with an empty prompt use your generic prompt. An empty generic prompt uses Loom’s built-in default. Turning the feature off in Card Forge restores the override that was set when you enabled it.
+From **Forges**, open **Loom summary prompts**, enable chat switching, and enter generic system and user prompts. Card Forge resolves each field independently, using the active card’s prompt and then the corresponding generic prompt. A blank generic system prompt uses Loom’s built-in default. A blank generic user prompt keeps your original Loom user template. Custom user prompts require `{{conversation}}` and either `{{previousSummaryBlock}}` or `{{existingSummary}}`. Turning syncing off restores both original overrides.
 
-Loom stores one override per account. Use this feature with one active roleplay chat at a time. Allow Loom to reload the override after switching chats before manually generating or rebuilding a summary.
+Loom stores one pair of overrides per account. Use this feature with one active roleplay chat at a time. Allow Loom to reload the override after switching chats before manually generating or rebuilding a summary.
 
 ## What gets saved
 
 - Card Forge can propose changes to the name, description, personality, scenario, opening message, alternate greetings, example dialogue, creator notes, system prompt and post-history instructions. New scenario cards include a narrator prompt that moves the story forward, including scenes where the player’s persona is alone.
 - Card Forge reads directly attached world books. It can create keyword entries and revise entry titles, activation keys and content. If a new entry needs a dedicated book, applying it creates or reuses the card’s forge book and attaches it.
-- Card-specific templates live under `character.extensions.voidverse_author` as `inline_tracker`, `summary_prompt` and `ledger_prompt`. The summary prompt can be synced into Loom. The two tracker prompts are saved for future continuity integration.
+- Card-specific templates live under `character.extensions.voidverse_author` as `inline_tracker`, `summary_prompt`, `summary_user_prompt` and `ledger_prompt`. The summary prompts can be synced into Loom. The inline tracker is available through `{{forgeInlineTracker}}`. The ledger prompt is saved for future continuity integration.
 - The selected preset provides enabled blocks in stored order, including their roles and placement. The model receives their authored text, linked lore, card fields, pending edits and forge conversation. Model context limits apply to large presets, books and conversations.
 - Each approved change is saved separately. The extension compares the current field with the value used to prepare the proposal. If a later change conflicts, earlier successful changes are recorded and the remaining proposals can be revised or discarded.
 

@@ -1,12 +1,12 @@
 import { expect, test } from "bun:test";
 import { createSummarySync } from "../src/summary-sync";
 
-function fixture() {
-  let config;
+function fixture(initialConfig?, cardUserPrompt?) {
+  let config = initialConfig;
   const native = { mode: "auto", messageLimitCount: 30, userPromptOverride: "Use the transcript.", systemPromptOverride: "Original" };
   const writes = [];
   const resolveCard = (id) => id === "custom"
-    ? { extensions: { voidverse_author: { summary_prompt: "Track the tide." } } }
+    ? { extensions: { voidverse_author: { summary_prompt: "Track the tide.", summary_user_prompt: cardUserPrompt } } }
     : { extensions: {} };
   const settings = {
     get: async (key) => {
@@ -78,4 +78,29 @@ test("a slow card lookup cannot overwrite the prompt for a newer chat switch", a
   release.resolve();
   await Promise.all([stale, latest]);
   expect(f.writes).toEqual(["Track the tide.", "Generic"]);
+});
+
+test("upgrades an enabled install and switches or restores both Loom prompts", async () => {
+  const cardUser = "{{previousSummaryBlock}} Follow the tide. {{conversation}}";
+  const genericUser = "{{existingSummary}} Track continuity. {{conversation}}";
+  const f = fixture({ enabled: true, fallback: "Generic", original: "Original" }, cardUser);
+  f.native.systemPromptOverride = "Track the tide.";
+  const sync = createSummarySync(f.settings, f.api);
+  await sync.follow("custom");
+  expect(f.native.userPromptOverride).toBe(cardUser);
+  await sync.follow("ordinary");
+  expect(f.native.userPromptOverride).toBe("Use the transcript.");
+  await sync.save(true, "Generic", genericUser);
+  await sync.follow("ordinary");
+  expect(f.native.userPromptOverride).toBe(genericUser);
+  await sync.follow("custom");
+  expect(f.native.userPromptOverride).toBe(cardUser);
+  await expect(sync.save(true, "Generic", "{{conversation}}")).rejects.toThrow("{{existingSummary}}");
+  expect((await sync.load()).fallbackUser).toBe(genericUser);
+  await sync.save(false, "", "");
+  expect(f.native).toMatchObject({
+    systemPromptOverride: "Original",
+    userPromptOverride: "Use the transcript.",
+    messageLimitCount: 30,
+  });
 });

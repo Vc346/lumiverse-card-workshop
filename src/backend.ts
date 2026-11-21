@@ -1,4 +1,5 @@
-import { workshop } from "./workshop";
+import { registerInlineTracker, workshop } from "./workshop";
+registerInlineTracker(spindle);
 const dispatch = workshop(spindle);
 spindle.onFrontendMessage(async (request, userId, frontendSessionId) => {
   if (request?.type !== "workshop" || !userId) return;

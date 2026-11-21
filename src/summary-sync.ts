@@ -1,5 +1,7 @@
+import { hasSummaryInputs, missingSummaryInputs } from "./summary-prompts";
+
 const CONFIG_KEY = "summary:prompt_sync";
-const defaults = { enabled: false, fallback: "", original: null };
+const defaults = { enabled: false, fallback: "", fallbackUser: "", original: null };
 
 async function request(path, options = {}) {
   const response = await fetch("/api/v1/" + path, {
@@ -31,14 +33,21 @@ export function createSummarySync(settings, api = request) {
     return { ...defaults, ...(await settings.get(CONFIG_KEY)) };
   }
 
-  async function writePrompt(prompt, current = () => !disposed) {
-    const row = await api("settings/summarization");
-    const value = row?.value ?? {};
-    if (!current() || (value.systemPromptOverride ?? null) === prompt) return;
+  async function readLoom() {
+    return (await api("settings/summarization"))?.value ?? {};
+  }
+
+  async function writePrompts(value, systemPrompt, userPrompt, current = () => !disposed) {
+    if (!current() || (
+      (value.systemPromptOverride ?? null) === systemPrompt &&
+      (value.userPromptOverride ?? null) === userPrompt
+    )) return;
     await api("settings/summarization", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ value: { ...value, systemPromptOverride: prompt } }),
+      body: JSON.stringify({
+        value: { ...value, systemPromptOverride: systemPrompt, userPromptOverride: userPrompt },
+      }),
     });
   }
 
@@ -50,31 +59,51 @@ export function createSummarySync(settings, api = request) {
       const config = await load();
       if (!config.enabled || !current()) return;
       const id = chatId === undefined ? (await api("settings/activeChatId"))?.value : chatId;
-      let prompt = usablePrompt(config.fallback);
+      let systemPrompt = usablePrompt(config.fallback);
+      let userPrompt = usablePrompt(config.fallbackUser);
       if (typeof id === "string" && id && current()) {
         const chat = await api("chats/" + encodeURIComponent(id) + "?messages=false");
         if (chat?.character_id && current()) {
           const card = await api("characters/" + encodeURIComponent(chat.character_id));
-          prompt = usablePrompt(card?.extensions?.voidverse_author?.summary_prompt) ?? prompt;
+          const templates = card?.extensions?.voidverse_author;
+          systemPrompt = usablePrompt(templates?.summary_prompt) ?? systemPrompt;
+          const customUserPrompt = usablePrompt(templates?.summary_user_prompt);
+          if (customUserPrompt && hasSummaryInputs(customUserPrompt)) userPrompt = customUserPrompt;
         }
       }
-      if (current()) await writePrompt(prompt, current);
+      if (!current()) return;
+      const loom = await readLoom();
+      if (!current()) return;
+      if (config.originalUser === undefined) {
+        // Older installs only replaced the system prompt. Capture the user prompt
+        // before the first sync that can replace it.
+        config.originalUser = loom.userPromptOverride ?? null;
+        await settings.set(CONFIG_KEY, config);
+      }
+      await writePrompts(loom, systemPrompt, userPrompt ?? config.originalUser, current);
     });
   }
 
-  async function save(enabled, fallback) {
+  async function save(enabled, fallback, fallbackUser = "") {
+    if (fallbackUser.trim() && !hasSummaryInputs(fallbackUser))
+      throw new Error(missingSummaryInputs);
     await enqueue(async () => {
       if (disposed) return;
       const previous = await load();
       let original = previous.original;
+      let originalUser = previous.originalUser;
       if (enabled && !previous.enabled) {
-        const row = await api("settings/summarization");
-        original = row?.value?.systemPromptOverride ?? null;
+        const loom = await readLoom();
+        original = loom.systemPromptOverride ?? null;
+        originalUser = loom.userPromptOverride ?? null;
       } else if (!enabled && previous.enabled) {
-        await writePrompt(original);
+        const loom = await readLoom();
+        const userPrompt = originalUser === undefined ? loom.userPromptOverride ?? null : originalUser;
+        await writePrompts(loom, original, userPrompt);
         original = null;
+        originalUser = null;
       }
-      if (!disposed) await settings.set(CONFIG_KEY, { enabled, fallback, original });
+      if (!disposed) await settings.set(CONFIG_KEY, { enabled, fallback, fallbackUser, original, originalUser });
     });
     if (enabled) await follow();
   }
