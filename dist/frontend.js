@@ -5454,6 +5454,183 @@ async function bindPersona(cardId, personaId, expectedPersonaId, api = request) 
   });
 }
 
+// extensions/voidverse_author/src/diff.ts
+var MAX_LCS_CELLS = 400000;
+function diffSequence(before, after) {
+  let start = 0;
+  let endBefore = before.length;
+  let endAfter = after.length;
+  while (start < endBefore && start < endAfter && before[start] === after[start])
+    start++;
+  while (endBefore > start && endAfter > start && before[endBefore - 1] === after[endAfter - 1]) {
+    endBefore--;
+    endAfter--;
+  }
+  const prefix = before.slice(0, start).map((value) => ({ type: "equal", value }));
+  const suffix = before.slice(endBefore).map((value) => ({ type: "equal", value }));
+  const a = before.slice(start, endBefore);
+  const b = after.slice(start, endAfter);
+  if (!a.length && !b.length)
+    return [...prefix, ...suffix];
+  if (!a.length)
+    return [...prefix, ...b.map((value) => ({ type: "add", value })), ...suffix];
+  if (!b.length)
+    return [...prefix, ...a.map((value) => ({ type: "del", value })), ...suffix];
+  const m = a.length;
+  const n = b.length;
+  if (m * n > MAX_LCS_CELLS) {
+    return [
+      ...prefix,
+      ...a.map((value) => ({ type: "del", value })),
+      ...b.map((value) => ({ type: "add", value })),
+      ...suffix
+    ];
+  }
+  const stride = n + 1;
+  const dp = new Uint32Array((m + 1) * stride);
+  for (let i = m - 1;i >= 0; i--) {
+    const row = i * stride;
+    const nextRow = (i + 1) * stride;
+    for (let j = n - 1;j >= 0; j--) {
+      if (a[i] === b[j])
+        dp[row + j] = dp[nextRow + j + 1] + 1;
+      else
+        dp[row + j] = Math.max(dp[nextRow + j], dp[row + j + 1]);
+    }
+  }
+  const middle = [];
+  let i = 0;
+  let j = 0;
+  while (i < m && j < n) {
+    if (a[i] === b[j]) {
+      middle.push({ type: "equal", value: a[i] });
+      i++;
+      j++;
+    } else if (dp[(i + 1) * stride + j] >= dp[i * stride + j + 1]) {
+      middle.push({ type: "del", value: a[i] });
+      i++;
+    } else {
+      middle.push({ type: "add", value: b[j] });
+      j++;
+    }
+  }
+  while (i < m)
+    middle.push({ type: "del", value: a[i++] });
+  while (j < n)
+    middle.push({ type: "add", value: b[j++] });
+  return [...prefix, ...middle, ...suffix];
+}
+function mergeSegments(ops, side) {
+  const result = [];
+  for (const op of ops) {
+    if (op.type !== "equal" && op.type !== side)
+      continue;
+    const prev = result.at(-1);
+    if (prev && prev.type === op.type)
+      prev.text += op.value;
+    else
+      result.push({ type: op.type, text: op.value });
+  }
+  return result;
+}
+function inlineDiff(before, after) {
+  const a = before.match(/\S+|\s+/g) ?? [];
+  const b = after.match(/\S+|\s+/g) ?? [];
+  if (!a.length || !b.length)
+    return null;
+  const ops = diffSequence(a, b);
+  let shared = 0;
+  let total = 0;
+  for (const op of ops) {
+    const weight = op.value.trim().length;
+    if (!weight)
+      continue;
+    if (op.type === "equal") {
+      shared += weight * 2;
+      total += weight * 2;
+    } else {
+      total += weight;
+    }
+  }
+  if (!shared || total === 0 || shared / total < 0.25)
+    return null;
+  return { del: mergeSegments(ops, "del"), add: mergeSegments(ops, "add") };
+}
+function splitLines(text) {
+  if (!text)
+    return [];
+  return text.replace(/\r\n/g, `
+`).split(`
+`);
+}
+function diffLines(before, after, context = 2) {
+  const ops = diffSequence(splitLines(before), splitLines(after));
+  const raw = [];
+  let added = 0;
+  let removed = 0;
+  let i = 0;
+  while (i < ops.length) {
+    if (ops[i].type === "equal") {
+      raw.push({ type: "equal", text: ops[i].value });
+      i++;
+      continue;
+    }
+    const dels = [];
+    const adds = [];
+    while (i < ops.length && ops[i].type !== "equal") {
+      if (ops[i].type === "del")
+        dels.push(ops[i].value);
+      else
+        adds.push(ops[i].value);
+      i++;
+    }
+    removed += dels.length;
+    added += adds.length;
+    const pairs = Math.min(dels.length, adds.length);
+    const highlights = Array.from({ length: pairs }, (_, index) => inlineDiff(dels[index], adds[index]));
+    dels.forEach((text, index) => {
+      const parts = highlights[index]?.del;
+      raw.push(parts ? { type: "del", text, parts } : { type: "del", text });
+    });
+    adds.forEach((text, index) => {
+      const parts = highlights[index]?.add;
+      raw.push(parts ? { type: "add", text, parts } : { type: "add", text });
+    });
+  }
+  if (added === 0 && removed === 0)
+    return { rows: raw, added: 0, removed: 0 };
+  const visible = new Array(raw.length).fill(false);
+  for (let index = 0;index < raw.length; index++) {
+    if (raw[index].type === "equal")
+      continue;
+    const from = Math.max(0, index - context);
+    const to = Math.min(raw.length - 1, index + context);
+    for (let k = from;k <= to; k++)
+      visible[k] = true;
+  }
+  const rows = [];
+  let index = 0;
+  while (index < raw.length) {
+    if (visible[index]) {
+      rows.push(raw[index]);
+      index++;
+      continue;
+    }
+    let end = index;
+    while (end < raw.length && !visible[end])
+      end++;
+    const skipped = end - index;
+    if (skipped <= 2) {
+      for (let k = index;k < end; k++)
+        rows.push(raw[k]);
+    } else {
+      rows.push({ type: "skip", count: skipped });
+    }
+    index = end;
+  }
+  return { rows, added, removed };
+}
+
 // extensions/voidverse_author/src/frontend.ts
 var markdown = new MarkdownItCallable({ html: false, breaks: true });
 markdown.validateLink = (url) => /^(https?:\/\/|mailto:)/i.test(url);
@@ -5787,6 +5964,78 @@ function setup(ctx) {
     }
     .vv-author .vv-value ol { margin: 0; padding-inline-start: 1.35em }
     .vv-author .vv-value li + li { margin-block-start: 8px }
+    .vv-author .vv-diff-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .vv-author .vv-diff-stats {
+      display: inline-flex;
+      gap: 6px;
+      font-size: .82em;
+      font-weight: 600;
+      font-family: ui-monospace, monospace;
+    }
+    .vv-author .vv-diff-added { color: #3fb950 }
+    .vv-author .vv-diff-removed { color: #f85149 }
+    .vv-author .vv-diff-toggle {
+      min-height: 28px;
+      padding: 3px 10px;
+      font-size: .82em;
+    }
+    .vv-author .vv-diff {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      border: 1px solid var(--lumiverse-border);
+      border-radius: 6px;
+      overflow: hidden;
+      background: var(--lumiverse-fill);
+      font-size: .92em;
+      line-height: 1.5;
+    }
+    .vv-author .vv-diff-line {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr);
+      gap: 6px;
+      padding: 2px 8px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .vv-author .vv-diff-gutter {
+      user-select: none;
+      text-align: center;
+      font-family: ui-monospace, monospace;
+      font-weight: 700;
+      opacity: .85;
+    }
+    .vv-author .vv-diff-line[data-kind="del"] {
+      background: color-mix(in srgb, #f85149 16%, transparent);
+    }
+    .vv-author .vv-diff-line[data-kind="del"] .vv-diff-gutter { color: #f85149 }
+    .vv-author .vv-diff-line[data-kind="add"] {
+      background: color-mix(in srgb, #3fb950 16%, transparent);
+    }
+    .vv-author .vv-diff-line[data-kind="add"] .vv-diff-gutter { color: #3fb950 }
+    .vv-author .vv-diff-line del {
+      text-decoration: none;
+      border-radius: 3px;
+      background: color-mix(in srgb, #f85149 32%, transparent);
+    }
+    .vv-author .vv-diff-line ins {
+      text-decoration: none;
+      border-radius: 3px;
+      background: color-mix(in srgb, #3fb950 32%, transparent);
+    }
+    .vv-author .vv-diff-skip {
+      padding: 4px 10px;
+      border-block: 1px solid var(--lumiverse-border);
+      background: var(--lumiverse-fill-subtle);
+      color: var(--lumiverse-text-muted);
+      font-size: .82em;
+      text-align: center;
+    }
     .vv-author .vv-composer {
       flex: none;
       display: grid;
@@ -5836,6 +6085,7 @@ function setup(ctx) {
       component.destroy();
   }
   let selected = new Set;
+  const fullViewProposals = new Set;
   let cardBinding;
   let personaToBind = null;
   let pendingTurn = null;
@@ -6641,6 +6891,94 @@ function setup(ctx) {
       element(details, "p", "Apply this entry from the Review tab.");
     }
   }
+  function hasExistingValue(value) {
+    return Array.isArray(value) ? value.length > 0 : typeof value === "string" && value.length > 0;
+  }
+  function proposalDiff(proposal) {
+    if (Array.isArray(proposal.before) && Array.isArray(proposal.value)) {
+      if (proposal.field === "alternate_greetings") {
+        const format = (list) => list.map((item, i) => "Greeting " + (i + 1) + `
+` + item).join(`
+
+`);
+        return diffLines(format(proposal.before), format(proposal.value));
+      }
+      const ops = diffSequence(proposal.before, proposal.value);
+      let added = 0;
+      let removed = 0;
+      const rows = ops.map((op) => {
+        if (op.type === "add")
+          added++;
+        if (op.type === "del")
+          removed++;
+        return { type: op.type, text: op.value };
+      });
+      return { rows, added, removed };
+    }
+    return diffLines(String(proposal.before ?? ""), String(proposal.value ?? ""));
+  }
+  function renderDiff(parent, proposal) {
+    const showingFull = fullViewProposals.has(proposal.id);
+    const diff = proposalDiff(proposal);
+    const bar = element(parent, "div");
+    bar.className = "vv-diff-bar";
+    const stats = element(bar, "span");
+    stats.className = "vv-diff-stats";
+    if (!diff.added && !diff.removed) {
+      element(stats, "span", "No text changes");
+    } else {
+      if (diff.added) {
+        const added = element(stats, "span", "+" + diff.added);
+        added.className = "vv-diff-added";
+      }
+      if (diff.removed) {
+        const removed = element(stats, "span", "-" + diff.removed);
+        removed.className = "vv-diff-removed";
+      }
+    }
+    const toggle = button(bar, showingFull ? "Show diff" : "Show full", () => {
+      if (showingFull)
+        fullViewProposals.delete(proposal.id);
+      else
+        fullViewProposals.add(proposal.id);
+      render();
+    });
+    toggle.classList.add("vv-diff-toggle");
+    toggle.disabled = false;
+    if (showingFull) {
+      element(parent, "strong", "Current value");
+      displayValue(parent, proposal.before);
+      element(parent, "strong", "Proposed value");
+      displayValue(parent, proposal.value);
+      return;
+    }
+    const box = element(parent, "div");
+    box.className = "vv-diff";
+    for (const row of diff.rows) {
+      if (row.type === "skip") {
+        const skip = element(box, "div", "⋯ " + row.count + " unchanged lines");
+        skip.className = "vv-diff-skip";
+        continue;
+      }
+      const line = element(box, "div");
+      line.className = "vv-diff-line";
+      line.dataset.kind = row.type;
+      const gutter = element(line, "span", row.type === "add" ? "+" : row.type === "del" ? "−" : " ");
+      gutter.className = "vv-diff-gutter";
+      gutter.setAttribute("aria-hidden", "true");
+      const content = element(line, "span");
+      if (row.parts?.length) {
+        for (const part of row.parts) {
+          if (part.type === "equal")
+            content.append(document.createTextNode(part.text));
+          else
+            element(content, part.type === "del" ? "del" : "ins", part.text);
+        }
+      } else {
+        content.textContent = row.text || " ";
+      }
+    }
+  }
   function proposals(parent) {
     const review = parent;
     element(review, "h3", "Proposed changes");
@@ -6667,16 +7005,20 @@ function setup(ctx) {
       box.disabled = busy;
       box.onchange = () => box.checked ? selected.add(p.id) : selected.delete(p.id);
       const details = disclosure(row, "proposal:" + p.id, label);
-      if (p.before !== null) {
-        element(details, "strong", "Current value");
-        displayValue(details, p.before);
-      }
       if (p.target === "new_persona") {
         newPersonaReview(details, p);
         continue;
       }
       if (p.target === "tracker_regex") {
+        if (p.before !== null) {
+          element(details, "strong", "Current value");
+          displayValue(details, p.before);
+        }
         trackerReview(details, p.value);
+        continue;
+      }
+      if (p.target !== "new_lore" && hasExistingValue(p.before)) {
+        renderDiff(details, p);
         continue;
       }
       element(details, "strong", "Proposed value");
@@ -6767,6 +7109,7 @@ function setup(ctx) {
       activeTab = "chat";
       openSections.clear();
       scrollPositions.clear();
+      fullViewProposals.clear();
     } else if (previous) {
       const view = previous.dataset.view;
       openSections.set(view, new Set(Array.from(previous.querySelectorAll("details[data-section][open]"), (details) => details.dataset.section)));

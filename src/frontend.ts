@@ -3,6 +3,7 @@ import { trackerScript } from "./tracker-rules";
 import { createSummarySync } from "./summary-sync";
 import { bindPersona, readPersonaBinding } from "./persona-binding";
 import { hasSummaryInputs, missingSummaryInputs } from "./summary-prompts";
+import { diffLines, diffSequence } from "./diff";
 
 const markdown = new MarkdownIt({ html: false, breaks: true });
 markdown.validateLink = (url) => /^(https?:\/\/|mailto:)/i.test(url);
@@ -343,6 +344,78 @@ export function setup(ctx) {
     }
     .vv-author .vv-value ol { margin: 0; padding-inline-start: 1.35em }
     .vv-author .vv-value li + li { margin-block-start: 8px }
+    .vv-author .vv-diff-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .vv-author .vv-diff-stats {
+      display: inline-flex;
+      gap: 6px;
+      font-size: .82em;
+      font-weight: 600;
+      font-family: ui-monospace, monospace;
+    }
+    .vv-author .vv-diff-added { color: #3fb950 }
+    .vv-author .vv-diff-removed { color: #f85149 }
+    .vv-author .vv-diff-toggle {
+      min-height: 28px;
+      padding: 3px 10px;
+      font-size: .82em;
+    }
+    .vv-author .vv-diff {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      border: 1px solid var(--lumiverse-border);
+      border-radius: 6px;
+      overflow: hidden;
+      background: var(--lumiverse-fill);
+      font-size: .92em;
+      line-height: 1.5;
+    }
+    .vv-author .vv-diff-line {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr);
+      gap: 6px;
+      padding: 2px 8px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .vv-author .vv-diff-gutter {
+      user-select: none;
+      text-align: center;
+      font-family: ui-monospace, monospace;
+      font-weight: 700;
+      opacity: .85;
+    }
+    .vv-author .vv-diff-line[data-kind="del"] {
+      background: color-mix(in srgb, #f85149 16%, transparent);
+    }
+    .vv-author .vv-diff-line[data-kind="del"] .vv-diff-gutter { color: #f85149 }
+    .vv-author .vv-diff-line[data-kind="add"] {
+      background: color-mix(in srgb, #3fb950 16%, transparent);
+    }
+    .vv-author .vv-diff-line[data-kind="add"] .vv-diff-gutter { color: #3fb950 }
+    .vv-author .vv-diff-line del {
+      text-decoration: none;
+      border-radius: 3px;
+      background: color-mix(in srgb, #f85149 32%, transparent);
+    }
+    .vv-author .vv-diff-line ins {
+      text-decoration: none;
+      border-radius: 3px;
+      background: color-mix(in srgb, #3fb950 32%, transparent);
+    }
+    .vv-author .vv-diff-skip {
+      padding: 4px 10px;
+      border-block: 1px solid var(--lumiverse-border);
+      background: var(--lumiverse-fill-subtle);
+      color: var(--lumiverse-text-muted);
+      font-size: .82em;
+      text-align: center;
+    }
     .vv-author .vv-composer {
       flex: none;
       display: grid;
@@ -407,6 +480,7 @@ export function setup(ctx) {
     for (const component of components.splice(0)) component.destroy();
   }
   let selected = new Set();
+  const fullViewProposals = new Set();
   let cardBinding;
   let personaToBind = null;
   let pendingTurn = null;
@@ -1211,6 +1285,85 @@ export function setup(ctx) {
       element(details, "p", "Apply this entry from the Review tab.");
     }
   }
+  function hasExistingValue(value) {
+    return Array.isArray(value) ? value.length > 0 : typeof value === "string" && value.length > 0;
+  }
+  function proposalDiff(proposal) {
+    if (Array.isArray(proposal.before) && Array.isArray(proposal.value)) {
+      if (proposal.field === "alternate_greetings") {
+        const format = (list) => list.map((item, i) => "Greeting " + (i + 1) + "\n" + item).join("\n\n");
+        return diffLines(format(proposal.before), format(proposal.value));
+      }
+      const ops = diffSequence(proposal.before, proposal.value);
+      let added = 0;
+      let removed = 0;
+      const rows = ops.map((op) => {
+        if (op.type === "add") added++;
+        if (op.type === "del") removed++;
+        return { type: op.type, text: op.value };
+      });
+      return { rows, added, removed };
+    }
+    return diffLines(String(proposal.before ?? ""), String(proposal.value ?? ""));
+  }
+  function renderDiff(parent, proposal) {
+    const showingFull = fullViewProposals.has(proposal.id);
+    const diff = proposalDiff(proposal);
+    const bar = element(parent, "div");
+    bar.className = "vv-diff-bar";
+    const stats = element(bar, "span");
+    stats.className = "vv-diff-stats";
+    if (!diff.added && !diff.removed) {
+      element(stats, "span", "No text changes");
+    } else {
+      if (diff.added) {
+        const added = element(stats, "span", "+" + diff.added);
+        added.className = "vv-diff-added";
+      }
+      if (diff.removed) {
+        const removed = element(stats, "span", "-" + diff.removed);
+        removed.className = "vv-diff-removed";
+      }
+    }
+    const toggle = button(bar, showingFull ? "Show diff" : "Show full", () => {
+      if (showingFull) fullViewProposals.delete(proposal.id);
+      else fullViewProposals.add(proposal.id);
+      render();
+    });
+    toggle.classList.add("vv-diff-toggle");
+    toggle.disabled = false;
+    if (showingFull) {
+      element(parent, "strong", "Current value");
+      displayValue(parent, proposal.before);
+      element(parent, "strong", "Proposed value");
+      displayValue(parent, proposal.value);
+      return;
+    }
+    const box = element(parent, "div");
+    box.className = "vv-diff";
+    for (const row of diff.rows) {
+      if (row.type === "skip") {
+        const skip = element(box, "div", "⋯ " + row.count + " unchanged lines");
+        skip.className = "vv-diff-skip";
+        continue;
+      }
+      const line = element(box, "div");
+      line.className = "vv-diff-line";
+      line.dataset.kind = row.type;
+      const gutter = element(line, "span", row.type === "add" ? "+" : row.type === "del" ? "−" : " ");
+      gutter.className = "vv-diff-gutter";
+      gutter.setAttribute("aria-hidden", "true");
+      const content = element(line, "span");
+      if (row.parts?.length) {
+        for (const part of row.parts) {
+          if (part.type === "equal") content.append(document.createTextNode(part.text));
+          else element(content, part.type === "del" ? "del" : "ins", part.text);
+        }
+      } else {
+        content.textContent = row.text || "\u00a0";
+      }
+    }
+  }
   function proposals(parent) {
     const review = parent;
     element(review, "h3", "Proposed changes");
@@ -1244,16 +1397,20 @@ export function setup(ctx) {
       box.onchange = () =>
         box.checked ? selected.add(p.id) : selected.delete(p.id);
       const details = disclosure(row, "proposal:" + p.id, label);
-      if (p.before !== null) {
-        element(details, "strong", "Current value");
-        displayValue(details, p.before);
-      }
       if (p.target === "new_persona") {
         newPersonaReview(details, p);
         continue;
       }
       if (p.target === "tracker_regex") {
+        if (p.before !== null) {
+          element(details, "strong", "Current value");
+          displayValue(details, p.before);
+        }
         trackerReview(details, p.value);
+        continue;
+      }
+      if (p.target !== "new_lore" && hasExistingValue(p.before)) {
+        renderDiff(details, p);
         continue;
       }
       element(details, "strong", "Proposed value");
@@ -1342,6 +1499,7 @@ export function setup(ctx) {
       activeTab = "chat";
       openSections.clear();
       scrollPositions.clear();
+      fullViewProposals.clear();
     } else if (previous) {
       const view = previous.dataset.view;
       openSections.set(view, new Set(
