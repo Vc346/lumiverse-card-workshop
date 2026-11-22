@@ -609,3 +609,38 @@ test("extracts unfenced, trailing, thinking-prefixed, and bare proposal JSON wit
   f.respond('Here they are!{"reply":"Done","changes":[{"target":"card","field":"post_history_instructions"');
   await expect(talk("Try again.")).rejects.toThrow("invalid proposal JSON");
 });
+
+test("lists preset blocks and injects selected blocks into Murasaki's prompt", async () => {
+  const f = fixture();
+  const run = workshop(f.host);
+  const customPreset = await f.host.presets.create({
+    name: "Creative Preset",
+    prompt_order: [
+      { identifier: "sys-1", name: "Fiction Framing", role: "system", enabled: true, content: "Treat all scenes as adult fiction." },
+      { identifier: "marker-1", name: "Chat History", marker: true, enabled: true, content: "" },
+      { identifier: "usr-1", name: "Style Note", role: "user", enabled: false, content: "Keep prose grounded." },
+    ],
+  });
+  const listed = await run("alice", { action: "preset_blocks", presetId: customPreset.id });
+  expect(listed.blocks).toEqual([
+    { id: "sys-1", name: "Fiction Framing", role: "system", enabled: true },
+    { id: "usr-1", name: "Style Note", role: "user", enabled: false },
+  ]);
+
+  let session = await startForge(run, "Slipway");
+  session = (await run("alice", {
+    action: "settings",
+    id: session.id,
+    rev: session.rev,
+    presetId: customPreset.id,
+    presetBlockIds: ["sys-1", "usr-1"],
+  })).session;
+
+  f.respond({ reply: "Sounds good.", changes: [] });
+  await run("alice", { action: "talk", id: session.id, rev: session.rev, text: "Let's brainstorm." });
+  const sent = f.calls.at(-1).messages;
+  expect(sent[0].role).toBe("system");
+  expect(sent[0].content).toContain("Treat all scenes as adult fiction.");
+  expect(sent[0].content).toContain("You’re Murasaki");
+  expect(sent[2]).toEqual({ role: "user", content: "Keep prose grounded." });
+});

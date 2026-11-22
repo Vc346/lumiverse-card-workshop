@@ -442,6 +442,14 @@ export function setup(ctx) {
       gap: 8px;
     }
     .vv-author .vv-proposal input { margin: 12px 4px; accent-color: var(--lumiverse-accent) }
+    .vv-author .vv-block-option {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+    }
+    .vv-author .vv-block-option input { accent-color: var(--lumiverse-accent) }
+    .vv-author .vv-block-meta { color: var(--lumiverse-text-muted); font-size: .82em }
     .vv-author .vv-actions { display: flex; gap: 8px; flex-wrap: wrap }
     .vv-author .vv-status { color: var(--lumiverse-text-muted) }
   `);
@@ -459,6 +467,9 @@ export function setup(ctx) {
     persona = "",
     preset = "",
     connection = "";
+  let presetBlockIds = new Set();
+  const presetBlocksCache = new Map();
+  let loadingPresetBlocks = "";
   let creationModal = null;
   let summaryModal = null;
   let deleteModal = null;
@@ -585,6 +596,8 @@ export function setup(ctx) {
           persona = session.personaId || "";
           preset = session.presetId || "";
           connection = session.connectionId || "";
+          presetBlockIds = new Set(session.presetBlockIds ?? []);
+          if (preset) loadPresetBlocks(preset);
         }
       }
       if (["open", "start", "talk"].includes(action)) draft = "";
@@ -700,14 +713,31 @@ export function setup(ctx) {
     input.disabled = busy;
     input.onchange = () => onChange(input.value);
   }
+  async function loadPresetBlocks(id) {
+    if (!id || presetBlocksCache.has(id) || loadingPresetBlocks === id) return;
+    loadingPresetBlocks = id;
+    try {
+      const data = await rpc({ action: "preset_blocks", presetId: id });
+      presetBlocksCache.set(id, data.blocks ?? []);
+    } catch {
+      presetBlocksCache.set(id, []);
+    } finally {
+      if (loadingPresetBlocks === id) loadingPresetBlocks = "";
+      if (alive && activeTab === "settings") render();
+    }
+  }
   const option = (id, name) => ({ id, name });
-  function selectors(parent) {
+  function selectors(parent, onPresetChange) {
     select(
       parent,
       "Writing preset",
       [option("", "No preset"), ...library.presets],
       preset,
-      (v) => (preset = v),
+      (v) => {
+        const changed = v !== preset;
+        preset = v;
+        if (changed && onPresetChange) onPresetChange(v);
+      },
     );
     select(
       parent,
@@ -716,6 +746,48 @@ export function setup(ctx) {
       connection,
       (v) => (connection = v),
     );
+  }
+  function presetBlockPicker(parent) {
+    if (!preset) return;
+    const blocks = presetBlocksCache.get(preset);
+    if (!blocks) {
+      loadPresetBlocks(preset);
+      element(parent, "p", "Loading preset blocks…").className = "vv-status";
+      return;
+    }
+    if (!blocks.length) return;
+    const count = blocks.filter((b) => presetBlockIds.has(b.id)).length;
+    const details = disclosure(
+      parent,
+      "preset-blocks",
+      "Include preset blocks in Murasaki’s prompt (" + count + " selected)",
+    );
+    element(
+      details,
+      "p",
+      "Selected blocks are sent to Murasaki along with her instructions.",
+    ).className = "vv-status";
+    for (const block of blocks) {
+      const row = element(details, "label");
+      row.className = "vv-block-option";
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = presetBlockIds.has(block.id);
+      box.disabled = busy;
+      box.onchange = () => {
+        if (box.checked) presetBlockIds.add(block.id);
+        else presetBlockIds.delete(block.id);
+        render();
+      };
+      row.appendChild(box);
+      element(row, "span", block.name);
+      const meta = element(
+        row,
+        "span",
+        "(" + block.role + (block.enabled ? "" : ", disabled") + ")",
+      );
+      meta.className = "vv-block-meta";
+    }
   }
   function personaSelector(parent) {
     select(
@@ -1066,10 +1138,20 @@ export function setup(ctx) {
     else if (activeTab === "card") cardAndLore(panel);
     else {
       element(panel, "h3", "Forge settings");
-      selectors(panel);
+      selectors(panel, (nextPreset) => {
+        presetBlockIds = new Set();
+        if (nextPreset) loadPresetBlocks(nextPreset);
+        render();
+      });
+      presetBlockPicker(panel);
       personaSelector(panel);
       button(panel, "Save settings", () =>
-        run("settings", { presetId: preset, connectionId: connection, personaId: persona }),
+        run("settings", {
+          presetId: preset,
+          presetBlockIds: [...presetBlockIds],
+          connectionId: connection,
+          personaId: persona,
+        }),
       );
     }
   }

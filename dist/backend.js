@@ -308,6 +308,24 @@ async function pages(fetchPage) {
 var cardValue = (card, field) => card[field] ?? (field === "alternate_greetings" ? [] : "");
 var plainCard = (card) => Object.fromEntries(fields.map((field) => [field, cardValue(card, field)]));
 var sameValue = (a, b) => a === b || Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((value, i) => value === b[i]);
+function presetBlocksOf(record) {
+  if (!Array.isArray(record?.prompt_order))
+    return [];
+  const blocks = [];
+  record.prompt_order.forEach((b, index) => {
+    if (!b || b.marker || typeof b.content !== "string" || !b.content.trim())
+      return;
+    const id = String(b.identifier ?? b.id ?? (b.name || "block") + "#" + index);
+    blocks.push({
+      id,
+      name: typeof b.name === "string" && b.name.trim() ? b.name.trim() : "Block " + (index + 1),
+      role: b.role === "user" || b.role === "assistant" ? b.role : "system",
+      enabled: b.enabled !== false,
+      content: b.content.trim()
+    });
+  });
+  return blocks;
+}
 function applyProposals(pending, proposed) {
   const next = [...pending];
   const history = new Map;
@@ -644,6 +662,19 @@ function workshop(host) {
     const index = () => state.sessions.map(({ id, title, kind }) => ({ id, title, kind }));
     if (req.action === "home")
       return { sessions: index(), catalog: await catalog(u) };
+    if (req.action === "preset_blocks") {
+      if (!req.presetId || typeof req.presetId !== "string")
+        return { blocks: [] };
+      const record = await host.presets.get(req.presetId, u);
+      return {
+        blocks: presetBlocksOf(record).map(({ id, name, role, enabled }) => ({
+          id,
+          name,
+          role,
+          enabled
+        }))
+      };
+    }
     if (req.action === "start") {
       const card = req.cardId ? await host.characters.get(req.cardId, u) : null;
       check(!req.cardId || card, "Card unavailable.");
@@ -695,7 +726,14 @@ function workshop(host) {
     }
     let overview;
     if (req.action === "settings") {
-      s.presetId = req.presetId || null;
+      const nextPreset = req.presetId || null;
+      const presetChanged = nextPreset !== s.presetId;
+      s.presetId = nextPreset;
+      if (Array.isArray(req.presetBlockIds)) {
+        s.presetBlockIds = nextPreset ? req.presetBlockIds.filter((id) => typeof id === "string" && id) : [];
+      } else if (presetChanged || !nextPreset) {
+        s.presetBlockIds = [];
+      }
       s.connectionId = req.connectionId || null;
       if (req.personaId !== undefined)
         s.personaId = (await selectedPersona(req.personaId, u))?.id ?? null;
@@ -718,16 +756,32 @@ function workshop(host) {
       }
       overview = await cardOverview(s, u);
       const ctx = await context({ ...s, pending: basePending }, u, overview);
+      let systemPrompt = instruction;
+      let extraMessages = [];
+      if (s.presetId && Array.isArray(s.presetBlockIds) && s.presetBlockIds.length) {
+        const record = await host.presets.get(s.presetId, u);
+        const wanted = new Set(s.presetBlockIds);
+        const chosen = presetBlocksOf(record).filter((b) => wanted.has(b.id));
+        const systemExtras = chosen.filter((b) => b.role === "system").map((b) => b.content);
+        if (systemExtras.length)
+          systemPrompt = systemExtras.join(`
+
+`) + `
+
+` + instruction;
+        extraMessages = chosen.filter((b) => b.role !== "system").map(({ role, content }) => ({ role, content }));
+      }
       const result = await host.generate.quiet({
         userId: u,
         connection_id: s.connectionId || undefined,
         messages: [
-          { role: "system", content: instruction },
+          { role: "system", content: systemPrompt },
           {
             role: "user",
             content: `Workshop reference data
 ` + JSON.stringify(ctx)
           },
+          ...extraMessages,
           ...history.map(({ role, content }) => ({ role, content })),
           { role: "user", content: text }
         ]
