@@ -276,7 +276,37 @@ export function setup(ctx) {
     .vv-author .vv-markdown code { font-family: ui-monospace, monospace }
     .vv-author .vv-markdown table { border-collapse: collapse }
     .vv-author .vv-markdown :is(th, td) { padding: .3em .5em; border: 1px solid var(--lumiverse-border) }
-    .vv-author .vv-log .vv-status { padding-inline-start: 36px; font-size: .875em }
+    .vv-author .vv-message[data-state="error"] { --vv-message-accent: #c95864 }
+    .vv-author .vv-waiting {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--lumiverse-text-muted);
+    }
+    .vv-author .vv-spinner {
+      box-sizing: border-box;
+      width: 15px;
+      height: 15px;
+      border: 2px solid color-mix(in srgb, var(--vv-message-accent) 30%, transparent);
+      border-top-color: var(--vv-message-accent);
+      border-radius: 50%;
+      animation: vv-spin .8s linear infinite;
+    }
+    @keyframes vv-spin {
+      to { transform: rotate(360deg) }
+    }
+    .vv-author .vv-bubble-footer {
+      display: flex;
+      justify-content: flex-end;
+    }
+    .vv-author .vv-regenerate {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 30px;
+      padding: 4px 10px;
+      font-size: .82em;
+    }
     .vv-author details > summary { cursor: pointer; font-weight: 600 }
     .vv-author .vv-preview {
       display: block;
@@ -367,6 +397,9 @@ export function setup(ctx) {
   let selected = new Set();
   let cardBinding;
   let personaToBind = null;
+  let pendingTurn = null;
+  let regenerating = false;
+  let regenError = "";
   let activeTab = "chat";
   const openSections = new Map();
   const scrollPositions = new Map();
@@ -428,9 +461,26 @@ export function setup(ctx) {
   }
   async function run(action, args = {}) {
     if (busy) return;
+    const isChatTurn = action === "talk" || action === "regenerate";
+    if (action === "talk") {
+      const text = typeof args.text === "string" ? args.text.trim() : "";
+      if (!text) {
+        status = "Enter a message.";
+        render();
+        return;
+      }
+      draft = "";
+      pendingTurn = { text, error: null };
+      regenerating = false;
+      regenError = "";
+      args = { ...args, text };
+    } else if (action === "regenerate") {
+      regenerating = true;
+      regenError = "";
+    }
     busy = true;
-    status = action === "talk" ? "Writing…" : "Loading…";
-    render(action === "talk");
+    status = isChatTurn ? "Writing…" : "Loading…";
+    render(isChatTurn);
     try {
       const data = await rpc({
         action: action === "refresh" ? "open" : action,
@@ -452,6 +502,11 @@ export function setup(ctx) {
         }
       }
       if (["open", "start", "talk"].includes(action)) draft = "";
+      if (["open", "start", "talk", "regenerate"].includes(action)) {
+        pendingTurn = null;
+        regenerating = false;
+        regenError = "";
+      }
       if (data.personas) library.personas = data.personas;
       selected = new Set();
       personaToBind = null;
@@ -462,7 +517,16 @@ export function setup(ctx) {
         cardBinding = await readPersonaBinding(session.cardId).catch(() => undefined);
       }
     } catch (error) {
-      status = error.message;
+      if (action === "talk" && pendingTurn) {
+        pendingTurn = { ...pendingTurn, error: error.message };
+        status = "";
+      } else if (action === "regenerate") {
+        regenerating = false;
+        regenError = error.message;
+        status = "";
+      } else {
+        status = error.message;
+      }
       // A host write may already have succeeded when a later proposal failed.
       if (session && action === "review") {
         try {
@@ -475,7 +539,7 @@ export function setup(ctx) {
       }
     } finally {
       busy = false;
-      if (alive) render(action === "talk");
+      if (alive) render(isChatTurn);
     }
   }
   async function finishPersonaBinding() {
@@ -863,6 +927,9 @@ export function setup(ctx) {
       connection = "";
       persona = "";
       cardBinding = undefined;
+      pendingTurn = null;
+      regenerating = false;
+      regenError = "";
       selected.clear();
       run("home");
     });
@@ -920,29 +987,94 @@ export function setup(ctx) {
       );
     }
   }
+  function messageBubble(parent, role, state = "") {
+    const isUser = role === "user";
+    const row = element(parent, "article");
+    row.className = "vv-message";
+    row.dataset.role = role;
+    if (state) row.dataset.state = state;
+    const avatar = element(row, "span", isUser ? "Y" : "M");
+    avatar.className = "vv-avatar";
+    avatar.setAttribute("aria-hidden", "true");
+    const bubble = element(row, "div");
+    bubble.className = "vv-bubble";
+    element(bubble, "strong", isUser ? "You" : "Murasaki");
+    return bubble;
+  }
+  function regenerateAction(bubble, onClick) {
+    const footer = element(bubble, "div");
+    footer.className = "vv-bubble-footer";
+    const control = button(footer, "", onClick);
+    control.classList.add("vv-regenerate");
+    control.setAttribute("aria-label", "Regenerate response");
+    const ns = "http://www.w3.org/2000/svg";
+    const icon = document.createElementNS(ns, "svg");
+    icon.setAttribute("viewBox", "0 0 24 24");
+    icon.setAttribute("width", "14");
+    icon.setAttribute("height", "14");
+    icon.setAttribute("aria-hidden", "true");
+    icon.setAttribute("fill", "none");
+    icon.setAttribute("stroke", "currentColor");
+    icon.setAttribute("stroke-width", "2");
+    icon.setAttribute("stroke-linecap", "round");
+    icon.setAttribute("stroke-linejoin", "round");
+    const shape = document.createElementNS(ns, "path");
+    shape.setAttribute("d", "M3 12a9 9 0 1 0 3-6.7L3 8 M3 3v5h5");
+    icon.appendChild(shape);
+    control.appendChild(icon);
+    element(control, "span", "Regenerate");
+  }
+  function waitingBubble(parent) {
+    const bubble = messageBubble(parent, "assistant", "pending");
+    const waiting = element(bubble, "div");
+    waiting.className = "vv-waiting";
+    waiting.setAttribute("role", "status");
+    waiting.setAttribute("aria-live", "polite");
+    const spinner = element(waiting, "span");
+    spinner.className = "vv-spinner";
+    spinner.setAttribute("aria-hidden", "true");
+    element(waiting, "span", "Writing…");
+  }
+  function errorBubble(parent, message, onRetry) {
+    const bubble = messageBubble(parent, "assistant", "error");
+    const text = element(bubble, "p", message);
+    text.setAttribute("role", "status");
+    regenerateAction(bubble, onRetry);
+  }
   function chat(panel) {
     const log = element(panel, "div");
     log.className = "vv-log";
     log.setAttribute("aria-label", "Forge conversation");
-    for (const message of session.messages) {
-      const row = element(log, "article");
-      row.className = "vv-message";
-      row.dataset.role = message.role;
+    const hideLastAssistant =
+      !pendingTurn &&
+      (regenerating || Boolean(regenError)) &&
+      session.messages.at(-1)?.role === "assistant";
+    const visibleMessages = hideLastAssistant ? session.messages.slice(0, -1) : session.messages;
+    const lastIndex = visibleMessages.length - 1;
+    visibleMessages.forEach((message, index) => {
       const isUser = message.role === "user";
-      const avatar = element(row, "span", isUser ? "Y" : "M");
-      avatar.className = "vv-avatar";
-      avatar.setAttribute("aria-hidden", "true");
-      const bubble = element(row, "div");
-      bubble.className = "vv-bubble";
-      element(bubble, "strong", isUser ? "You" : "Murasaki");
+      const bubble = messageBubble(log, message.role);
       if (isUser) {
         element(bubble, "p", message.content);
       } else {
         const rendered = ctx.dom.inject(bubble, markdown.render(message.content));
         rendered.classList.add("vv-markdown");
+        if (!pendingTurn && index === lastIndex) regenerateAction(bubble, () => run("regenerate"));
       }
+    });
+    if (pendingTurn) {
+      const userBubble = messageBubble(log, "user");
+      element(userBubble, "p", pendingTurn.text);
+      if (pendingTurn.error) {
+        errorBubble(log, pendingTurn.error, () => run("talk", { text: pendingTurn.text }));
+      } else {
+        waitingBubble(log);
+      }
+    } else if (regenerating) {
+      waitingBubble(log);
+    } else if (regenError) {
+      errorBubble(log, regenError, () => run("regenerate"));
     }
-    if (status === "Writing…") showStatus(log);
     const composer = element(panel, "div");
     composer.className = "vv-composer";
     const input = element(composer, "textarea");

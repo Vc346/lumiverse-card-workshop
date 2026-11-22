@@ -1,5 +1,5 @@
 // @bun
-// src/tracker-rules.ts
+// extensions/voidverse_author/src/tracker-rules.ts
 var ACCENTS = {
   theme: "var(--lumiverse-accent, #8c70c7)",
   ocean: "#569cb6",
@@ -55,13 +55,13 @@ function trackerStamp(tag) {
   return { [STAMP]: tag };
 }
 
-// src/summary-prompts.ts
+// extensions/voidverse_author/src/summary-prompts.ts
 var missingSummaryInputs = "A custom summary user prompt needs {{conversation}} and either {{previousSummaryBlock}} or {{existingSummary}}.";
 function hasSummaryInputs(prompt) {
   return prompt.includes("{{conversation}}") && (prompt.includes("{{previousSummaryBlock}}") || prompt.includes("{{existingSummary}}"));
 }
 
-// src/workshop.ts
+// extensions/voidverse_author/src/workshop.ts
 var NS = "voidverse_author";
 var narrator = "Narrate the setting and move the story forward through events, consequences, and changes in the world. A scene can center on the player\u2019s persona alone. Portray supporting characters when they have a reason to enter. Leave the player\u2019s decisions, dialogue, and inner life to the player.";
 var FILE = "workshops.json";
@@ -193,6 +193,38 @@ async function pages(fetchPage) {
 var cardValue = (card, field) => card[field] ?? (field === "alternate_greetings" ? [] : "");
 var plainCard = (card) => Object.fromEntries(fields.map((field) => [field, cardValue(card, field)]));
 var sameValue = (a, b) => a === b || Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((value, i) => value === b[i]);
+function applyProposals(pending, proposed) {
+  const next = [...pending];
+  const history = new Map;
+  for (const p of proposed) {
+    const i = next.findIndex((old) => old.id === p.id);
+    if (!history.has(p.id))
+      history.set(p.id, i < 0 ? null : next[i]);
+    if (i < 0)
+      next.push(p);
+    else
+      next.splice(i, 1, p);
+  }
+  return {
+    pending: next,
+    lastTurnProposals: [...history.entries()].map(([id, previous]) => ({ id, previous }))
+  };
+}
+function revertLastProposals(s) {
+  if (!Array.isArray(s.lastTurnProposals) || !s.lastTurnProposals.length)
+    return [...s.pending];
+  const reverted = [...s.pending];
+  for (const { id, previous } of s.lastTurnProposals) {
+    const index = reverted.findIndex((p) => p.id === id);
+    if (index < 0)
+      continue;
+    if (previous)
+      reverted[index] = previous;
+    else
+      reverted.splice(index, 1);
+  }
+  return reverted;
+}
 function registerInlineTracker(host) {
   host.registerMacro({
     name: "forgeInlineTracker",
@@ -553,11 +585,24 @@ function workshop(host) {
       if (req.personaId !== undefined)
         s.personaId = (await selectedPersona(req.personaId, u))?.id ?? null;
       overview = await cardOverview(s, u);
-    } else if (req.action === "talk") {
-      const text = string(req.text, "message", 32000).trim();
-      check(text, "Enter a message.");
+    } else if (req.action === "talk" || req.action === "regenerate") {
+      const isRegen = req.action === "regenerate";
+      let text;
+      let history;
+      let basePending;
+      if (isRegen) {
+        check(s.messages.length >= 2 && s.messages.at(-2)?.role === "user" && s.messages.at(-1)?.role === "assistant", "No reply to regenerate.");
+        text = s.messages.at(-2).content;
+        history = s.messages.slice(0, -2);
+        basePending = revertLastProposals(s);
+      } else {
+        text = string(req.text, "message", 32000).trim();
+        check(text, "Enter a message.");
+        history = s.messages;
+        basePending = s.pending;
+      }
       overview = await cardOverview(s, u);
-      const ctx = await context(s, u, overview);
+      const ctx = await context({ ...s, pending: basePending }, u, overview);
       const result = await host.generate.quiet({
         userId: u,
         connection_id: s.connectionId || undefined,
@@ -568,7 +613,7 @@ function workshop(host) {
             content: `Workshop reference data
 ` + JSON.stringify(ctx)
           },
-          ...s.messages,
+          ...history,
           { role: "user", content: text }
         ]
       });
@@ -579,14 +624,14 @@ function workshop(host) {
         check(change && typeof change === "object", "Invalid proposal. No changes were added to Review.");
         return proposal(change, ctx, overview.trackerRules);
       });
-      for (const p of proposed) {
-        const i = s.pending.findIndex((old) => old.id === p.id);
-        if (i < 0)
-          s.pending.push(p);
-        else
-          s.pending[i] = p;
+      const next = applyProposals(basePending, proposed);
+      s.pending = next.pending;
+      s.lastTurnProposals = next.lastTurnProposals;
+      if (isRegen) {
+        s.messages = [...history, { role: "user", content: text }, { role: "assistant", content: answer.reply }];
+      } else {
+        s.messages.push({ role: "user", content: text }, { role: "assistant", content: answer.reply });
       }
-      s.messages.push({ role: "user", content: text }, { role: "assistant", content: answer.reply });
     } else if (req.action === "clear_persona_binding") {
       check(s.personaBinding && req.personaId === s.personaBinding.personaId, "The pending persona binding changed.");
       delete s.personaBinding;
@@ -600,6 +645,8 @@ function workshop(host) {
           await apply(s, p, u, save, bind);
         }
         s.pending = s.pending.filter((x) => x.id !== p.id);
+        if (Array.isArray(s.lastTurnProposals))
+          s.lastTurnProposals = s.lastTurnProposals.filter((x) => x.id !== p.id);
         s.rev++;
         await save();
       }
@@ -723,7 +770,7 @@ function workshop(host) {
   };
 }
 
-// src/backend.ts
+// extensions/voidverse_author/src/backend.ts
 registerInlineTracker(spindle);
 var dispatch = workshop(spindle);
 spindle.onFrontendMessage(async (request, userId, frontendSessionId) => {

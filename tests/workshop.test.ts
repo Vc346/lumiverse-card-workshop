@@ -465,3 +465,71 @@ test("creates a persona independently and keeps the approved binding until the c
   const { session: cleared } = await request(cardSaved, "clear_persona_binding", { personaId: f.personas[0].id });
   expect(cleared.personaBinding).toBeUndefined();
 });
+
+test("regenerates the last reply and reverts unapplied proposals from the replaced turn", async () => {
+  const f = fixture();
+  const run = workshop(f.host);
+  let session = await startForge(run, "Slipway");
+  const request = (s, action, args = {}) => run("alice", { action, id: s.id, rev: s.rev, ...args });
+  await expect(request(session, "regenerate")).rejects.toThrow("No reply to regenerate");
+
+  f.respond({
+    reply: "First turn reply.",
+    changes: [
+      { target: "card", field: "description", value: "Initial harbor description." },
+      { target: "card", field: "personality", value: "Quiet and observant." },
+    ],
+  });
+  session = (await request(session, "talk", { text: "Draft description and personality." })).session;
+  expect(session.pending.map((p) => [p.id, p.value])).toEqual([
+    ["card.description", "Initial harbor description."],
+    ["card.personality", "Quiet and observant."],
+  ]);
+
+  f.respond({
+    reply: "Second turn first attempt.",
+    changes: [
+      { target: "card", field: "description", value: "Overwritten description." },
+      { target: "card", field: "scenario", value: "Storm coming in." },
+    ],
+  });
+  session = (await request(session, "talk", { text: "Revise description and add scenario." })).session;
+  expect(session.messages).toHaveLength(4);
+  expect(session.pending.map((p) => [p.id, p.value])).toEqual([
+    ["card.description", "Overwritten description."],
+    ["card.personality", "Quiet and observant."],
+    ["card.scenario", "Storm coming in."],
+  ]);
+
+  // If regeneration fails, the previous turn and its proposals stay intact.
+  f.respond("```json\n{\"reply\":\n```");
+  await expect(request(session, "regenerate")).rejects.toThrow("invalid proposal JSON");
+  const unchanged = (await run("alice", { action: "open", id: session.id })).session;
+  expect(unchanged.messages).toEqual(session.messages);
+  expect(unchanged.pending).toEqual(session.pending);
+
+  // Successful regeneration reverts the replaced turn's unapplied edits and applies the new ones.
+  f.respond({
+    reply: "Second turn regenerated reply.",
+    changes: [
+      { target: "card", field: "first_mes", value: "Rain hits the tin roof." },
+    ],
+  });
+  session = (await request(session, "regenerate")).session;
+  expect(session.messages).toEqual([
+    { role: "user", content: "Draft description and personality." },
+    { role: "assistant", content: "First turn reply." },
+    { role: "user", content: "Revise description and add scenario." },
+    { role: "assistant", content: "Second turn regenerated reply." },
+  ]);
+  const promptContext = JSON.parse(f.calls.at(-1).messages[1].content.split("\n")[1]);
+  expect(promptContext.pending.map((p) => [p.id, p.value])).toEqual([
+    ["card.description", "Initial harbor description."],
+    ["card.personality", "Quiet and observant."],
+  ]);
+  expect(session.pending.map((p) => [p.id, p.value])).toEqual([
+    ["card.description", "Initial harbor description."],
+    ["card.personality", "Quiet and observant."],
+    ["card.first_mes", "Rain hits the tin roof."],
+  ]);
+});
