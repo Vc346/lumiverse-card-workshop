@@ -130,14 +130,14 @@ The continuity fields
 
 How to send replies and proposals
 
-Talk things through freely. Propose edits only when asked. Return one JSON object with the shape {"reply":"conversational answer","changes":[]}. Markdown is welcome inside the reply string. Use an empty changes array when we\u2019re just talking.
+Talk things through freely. Propose edits only when asked. Return one JSON object with the shape {"reply":"conversational answer","changes":[]}. Start the response directly with { and end with }\u2014do not write prose before or after the JSON object. Markdown is welcome inside the reply string. Use an empty changes array when we\u2019re just talking. Only say you drafted, updated, or queued a proposal when that edit is actually included in the changes array of the same JSON object.
 
 Each change has target, field, and value.
 
 - A player persona describes the identity the writer plays. Keep it separate from the character or scenario card.
 - For a new player persona use target "new_persona", field "persona", and value {"name":"Name","title":"Tagline","description":"Description"}. To revise a pending new persona, include its proposalId.
 - To revise the selected player persona, use target "persona" and field "name", "title", or "description" with a replacement string. Forge supplies the selected persona in the context.
-- For target "card", use one of the supplied card fields. Use a replacement string except for "alternate_greetings", which takes an ordered array of strings.
+- For target "card", use one of the supplied card fields ("name", "description", "personality", "scenario", "first_mes", "alternate_greetings", "mes_example", "creator_notes", "system_prompt", or "post_history_instructions"). Use a replacement string except for "alternate_greetings", which takes an ordered array of strings.
 - For target "template", use "inline_tracker", "summary_prompt", "summary_user_prompt", or "ledger_prompt" with a replacement string.
 - For target "tracker_regex", use field "display" and value {"tag":"scene_state","title":"Scene state","accent":"theme","sample":"Location: The slipway"}. The sample is plain tracker body text without tags. Available accents are theme, ocean, amber, and rose. Use the same tag to revise an existing Forge tracker rule. This rule styles rendered assistant replies for this card.
 - For target "lore", supply entryId from the context. Use field "content" or "comment" with replacement text, or field "key" with a list of activation keywords.
@@ -152,27 +152,142 @@ function string(value, label, max = 1e5) {
   check(typeof value === "string" && value.length <= max, "Invalid " + label);
   return value;
 }
+function isChangeObject(item) {
+  return Boolean(item && typeof item === "object" && !Array.isArray(item) && typeof item.target === "string" && typeof item.field === "string" && Object.hasOwn(item, "value"));
+}
+function normalizePayload(value) {
+  if (Array.isArray(value)) {
+    if (value.length && value.every(isChangeObject))
+      return { reply: null, changes: value };
+    return null;
+  }
+  if (!value || typeof value !== "object")
+    return null;
+  if (Array.isArray(value.changes)) {
+    if (typeof value.reply === "string" || value.reply == null)
+      return { reply: value.reply ?? null, changes: value.changes };
+    return null;
+  }
+  if (isChangeObject(value))
+    return { reply: null, changes: [value] };
+  return null;
+}
+function readJsonSpan(text, start) {
+  const open = text[start];
+  if (open === "{") {
+    if (!/^\{\s*"/.test(text.slice(start, start + 32)))
+      return null;
+  } else if (open === "[") {
+    if (!/^\[\s*\{\s*"/.test(text.slice(start, start + 32)))
+      return null;
+  } else {
+    return null;
+  }
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start;i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped)
+        escaped = false;
+      else if (ch === "\\")
+        escaped = true;
+      else if (ch === '"')
+        inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === "{" || ch === "[")
+      depth++;
+    else if (ch === "}" || ch === "]") {
+      depth--;
+      if (depth === 0) {
+        try {
+          return { end: i + 1, value: JSON.parse(text.slice(start, i + 1)) };
+        } catch {
+          return null;
+        }
+      }
+      if (depth < 0)
+        return null;
+    }
+  }
+  return null;
+}
 function readReply(content) {
   const error = "Murasaki returned invalid proposal JSON. No changes were added to Review. Try sending your message again.";
+  const multiple = "Murasaki returned multiple proposal blocks. No changes were added to Review.";
+  const cleaned = content.replace(/^\s*<think>[\s\S]*?<\/think>\s*/i, "").trim();
+  check(cleaned, "The model returned an empty reply.");
   const fences = /^ {0,3}(\x60{3,}|~{3,})(?![\x60~])([^\r\n]*)\r?\n([\s\S]*?)(?:^ {0,3}\1[ \t]*(?=\r?$)|(?![\s\S]))/gm;
-  let payload = content;
+  let answer = null;
   let before = "";
   let after = "";
-  if (!content.startsWith("{")) {
-    const candidates = [...content.matchAll(fences)].filter(([, , language, body]) => /^(?:json)?$/i.test(language.trim()) && /^\s*\{[\s\S]*?"(?:reply|changes)"\s*:/.test(body));
-    if (!candidates.length)
-      return { reply: content, changes: [] };
-    check(candidates.length === 1, "Murasaki returned multiple proposal blocks. No changes were added to Review.");
-    const [block, , , body] = candidates[0];
-    payload = body;
-    before = content.slice(0, candidates[0].index).trim();
-    after = content.slice(candidates[0].index + block.length).trim();
-  }
-  let answer;
-  try {
-    answer = JSON.parse(payload);
-  } catch {
-    throw new Error(error);
+  if (cleaned.startsWith("{") || /^\[\s*\{/.test(cleaned)) {
+    let parsed;
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch {
+      const span = readJsonSpan(cleaned, 0);
+      if (span) {
+        parsed = span.value;
+        after = cleaned.slice(span.end).trim();
+      } else {
+        throw new Error(error);
+      }
+    }
+    answer = normalizePayload(parsed);
+    check(answer, error);
+  } else {
+    const candidates = [...cleaned.matchAll(fences)].filter(([, , language, body]) => /^(?:jsonc?)?$/i.test(language.trim()) && (/^\s*\{[\s\S]*?"(?:reply|changes)"\s*:/.test(body) || /^\s*[\{\[][\s\S]*?"target"\s*:[\s\S]*?"field"\s*:/.test(body)));
+    if (candidates.length) {
+      check(candidates.length === 1, multiple);
+      const [block, , , body] = candidates[0];
+      let parsed;
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        throw new Error(error);
+      }
+      answer = normalizePayload(parsed);
+      check(answer, error);
+      before = cleaned.slice(0, candidates[0].index).trim();
+      after = cleaned.slice(candidates[0].index + block.length).trim();
+    } else {
+      const embedded = [];
+      let scan = 0;
+      while (scan < cleaned.length) {
+        const nextObj = cleaned.indexOf("{", scan);
+        const nextArr = cleaned.indexOf("[", scan);
+        const start = nextObj < 0 ? nextArr : nextArr < 0 ? nextObj : Math.min(nextObj, nextArr);
+        if (start < 0)
+          break;
+        const span = readJsonSpan(cleaned, start);
+        if (span) {
+          const normalized = normalizePayload(span.value);
+          if (normalized) {
+            embedded.push({ start, end: span.end, answer: normalized });
+            scan = span.end;
+            continue;
+          }
+        }
+        scan = start + 1;
+      }
+      if (embedded.length) {
+        check(embedded.length === 1, multiple);
+        const match = embedded[0];
+        answer = match.answer;
+        before = cleaned.slice(0, match.start).trim();
+        after = cleaned.slice(match.end).trim();
+      } else {
+        check(!/\{\s*"(?:reply|changes)"\s*:/.test(cleaned), error);
+        return { reply: cleaned, changes: [] };
+      }
+    }
   }
   check(Array.isArray(answer?.changes) && (typeof answer.reply === "string" || answer.reply == null && (before || after)), error);
   const reply = [...new Set([before, answer.reply?.trim(), after].filter(Boolean))].join(`
@@ -613,7 +728,7 @@ function workshop(host) {
             content: `Workshop reference data
 ` + JSON.stringify(ctx)
           },
-          ...history,
+          ...history.map(({ role, content }) => ({ role, content })),
           { role: "user", content: text }
         ]
       });
@@ -627,10 +742,15 @@ function workshop(host) {
       const next = applyProposals(basePending, proposed);
       s.pending = next.pending;
       s.lastTurnProposals = next.lastTurnProposals;
+      const assistantMessage = proposed.length ? {
+        role: "assistant",
+        content: answer.reply,
+        proposals: proposed.map(({ target, field, label }) => ({ target, field, label }))
+      } : { role: "assistant", content: answer.reply };
       if (isRegen) {
-        s.messages = [...history, { role: "user", content: text }, { role: "assistant", content: answer.reply }];
+        s.messages = [...history, { role: "user", content: text }, assistantMessage];
       } else {
-        s.messages.push({ role: "user", content: text }, { role: "assistant", content: answer.reply });
+        s.messages.push({ role: "user", content: text }, assistantMessage);
       }
     } else if (req.action === "clear_persona_binding") {
       check(s.personaBinding && req.personaId === s.personaBinding.personaId, "The pending persona binding changed.");

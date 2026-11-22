@@ -5741,7 +5741,19 @@ function setup(ctx) {
     }
     .vv-author .vv-bubble-footer {
       display: flex;
+      flex-wrap: wrap;
+      align-items: center;
       justify-content: flex-end;
+      gap: 6px;
+    }
+    .vv-author .vv-queued {
+      margin-inline-end: auto;
+      min-height: 30px;
+      padding: 4px 10px;
+      font-size: .82em;
+      text-align: left;
+      color: var(--lumiverse-accent, #8c70c7);
+      border-color: color-mix(in srgb, var(--lumiverse-accent, #8c70c7) 40%, var(--lumiverse-border));
     }
     .vv-author .vv-regenerate {
       display: inline-flex;
@@ -6433,28 +6445,40 @@ function setup(ctx) {
     element(bubble, "strong", isUser ? "You" : "Murasaki");
     return bubble;
   }
-  function regenerateAction(bubble, onClick) {
+  function bubbleFooter(bubble, { proposals: queued, onRegenerate } = {}) {
+    if (!queued?.length && !onRegenerate)
+      return;
     const footer = element(bubble, "div");
     footer.className = "vv-bubble-footer";
-    const control = button(footer, "", onClick);
-    control.classList.add("vv-regenerate");
-    control.setAttribute("aria-label", "Regenerate response");
-    const ns = "http://www.w3.org/2000/svg";
-    const icon = document.createElementNS(ns, "svg");
-    icon.setAttribute("viewBox", "0 0 24 24");
-    icon.setAttribute("width", "14");
-    icon.setAttribute("height", "14");
-    icon.setAttribute("aria-hidden", "true");
-    icon.setAttribute("fill", "none");
-    icon.setAttribute("stroke", "currentColor");
-    icon.setAttribute("stroke-width", "2");
-    icon.setAttribute("stroke-linecap", "round");
-    icon.setAttribute("stroke-linejoin", "round");
-    const shape = document.createElementNS(ns, "path");
-    shape.setAttribute("d", "M3 12a9 9 0 1 0 3-6.7L3 8 M3 3v5h5");
-    icon.appendChild(shape);
-    control.appendChild(icon);
-    element(control, "span", "Regenerate");
+    if (queued?.length) {
+      const names = queued.map((item) => proposalLabel(item));
+      const summary = names.length <= 2 ? "Queued in Review: " + names.join(", ") : "Queued " + names.length + " proposals in Review";
+      const link = button(footer, summary, () => activateTab("review"));
+      link.classList.add("vv-queued");
+      link.disabled = false;
+      link.title = names.join(", ");
+    }
+    if (onRegenerate) {
+      const control = button(footer, "", onRegenerate);
+      control.classList.add("vv-regenerate");
+      control.setAttribute("aria-label", "Regenerate response");
+      const ns = "http://www.w3.org/2000/svg";
+      const icon = document.createElementNS(ns, "svg");
+      icon.setAttribute("viewBox", "0 0 24 24");
+      icon.setAttribute("width", "14");
+      icon.setAttribute("height", "14");
+      icon.setAttribute("aria-hidden", "true");
+      icon.setAttribute("fill", "none");
+      icon.setAttribute("stroke", "currentColor");
+      icon.setAttribute("stroke-width", "2");
+      icon.setAttribute("stroke-linecap", "round");
+      icon.setAttribute("stroke-linejoin", "round");
+      const shape = document.createElementNS(ns, "path");
+      shape.setAttribute("d", "M3 12a9 9 0 1 0 3-6.7L3 8 M3 3v5h5");
+      icon.appendChild(shape);
+      control.appendChild(icon);
+      element(control, "span", "Regenerate");
+    }
   }
   function waitingBubble(parent) {
     const bubble = messageBubble(parent, "assistant", "pending");
@@ -6471,7 +6495,7 @@ function setup(ctx) {
     const bubble = messageBubble(parent, "assistant", "error");
     const text = element(bubble, "p", message);
     text.setAttribute("role", "status");
-    regenerateAction(bubble, onRetry);
+    bubbleFooter(bubble, { onRegenerate: onRetry });
   }
   function chat(panel) {
     const log = element(panel, "div");
@@ -6488,8 +6512,10 @@ function setup(ctx) {
       } else {
         const rendered = ctx.dom.inject(bubble, markdown.render(message.content));
         rendered.classList.add("vv-markdown");
-        if (!pendingTurn && index === lastIndex)
-          regenerateAction(bubble, () => run("regenerate"));
+        bubbleFooter(bubble, {
+          proposals: message.proposals,
+          onRegenerate: !pendingTurn && index === lastIndex ? () => run("regenerate") : null
+        });
       }
     });
     if (pendingTurn) {

@@ -516,11 +516,19 @@ test("regenerates the last reply and reverts unapplied proposals from the replac
     ],
   });
   session = (await request(session, "regenerate")).session;
-  expect(session.messages).toEqual([
+  expect(session.messages.map(({ role, content }) => ({ role, content }))).toEqual([
     { role: "user", content: "Draft description and personality." },
     { role: "assistant", content: "First turn reply." },
     { role: "user", content: "Revise description and add scenario." },
     { role: "assistant", content: "Second turn regenerated reply." },
+  ]);
+  expect(session.messages.at(-1).proposals).toEqual([
+    { target: "card", field: "first_mes", label: "first mes" },
+  ]);
+  expect(f.calls.at(-1).messages.slice(2)).toEqual([
+    { role: "user", content: "Draft description and personality." },
+    { role: "assistant", content: "First turn reply." },
+    { role: "user", content: "Revise description and add scenario." },
   ]);
   const promptContext = JSON.parse(f.calls.at(-1).messages[1].content.split("\n")[1]);
   expect(promptContext.pending.map((p) => [p.id, p.value])).toEqual([
@@ -532,4 +540,72 @@ test("regenerates the last reply and reverts unapplied proposals from the replac
     ["card.personality", "Quiet and observant."],
     ["card.first_mes", "Rain hits the tin roof."],
   ]);
+});
+
+test("extracts unfenced, trailing, thinking-prefixed, and bare proposal JSON without leaking raw JSON", async () => {
+  const f = fixture();
+  const run = workshop(f.host);
+  let session = await startForge(run, "Asuka");
+  const talk = (text) => run("alice", { action: "talk", id: session.id, rev: session.rev, text });
+
+  // Exact reproduction: prose immediately followed by unfenced JSON with template macros inside.
+  const lead = "Here they are—emitting the proposals for post_history_instructions and creator_notes cleanly now!";
+  f.respond(
+    lead +
+      JSON.stringify({
+        reply: lead,
+        changes: [
+          {
+            target: "card",
+            field: "post_history_instructions",
+            value: "Keep {{user}} anchored.\n\n{{forgeInlineTracker}}",
+          },
+          {
+            target: "card",
+            field: "creator_notes",
+            value: "Uses {{forgeInlineTracker}} in PHI.",
+          },
+        ],
+      }),
+  );
+  session = (await talk("Emit them again.")).session;
+  expect(session.messages.at(-1).content).toBe(lead);
+  expect(session.pending.map((p) => [p.id, p.value])).toEqual([
+    ["card.post_history_instructions", "Keep {{user}} anchored.\n\n{{forgeInlineTracker}}"],
+    ["card.creator_notes", "Uses {{forgeInlineTracker}} in PHI."],
+  ]);
+  expect(session.messages.at(-1).proposals).toHaveLength(2);
+
+  // Leading <think> block and trailing prose after top-level JSON.
+  f.respond(
+    "<think>Check scenario voice.</think>\n" +
+      JSON.stringify({
+        reply: "Tightened the scenario.",
+        changes: [{ target: "card", field: "scenario", value: "Rain over Manhattan." }],
+      }) +
+      "\n\nLet me know if you want another pass.",
+  );
+  session = (await talk("Update scenario.")).session;
+  expect(session.messages.at(-1).content).toBe(
+    "Tightened the scenario.\n\nLet me know if you want another pass.",
+  );
+  expect(session.pending.find((p) => p.id === "card.scenario")?.value).toBe("Rain over Manhattan.");
+
+  // Fenced bare change object without an outer {reply, changes} wrapper.
+  const fence = String.fromCharCode(96).repeat(3);
+  f.respond(
+    "Here is the personality update:\n\n" +
+      fence +
+      "json\n" +
+      JSON.stringify({ target: "card", field: "personality", value: "Dry, observant, guarded." }) +
+      "\n" +
+      fence,
+  );
+  session = (await talk("Draft personality.")).session;
+  expect(session.messages.at(-1).content).toBe("Here is the personality update:");
+  expect(session.pending.find((p) => p.id === "card.personality")?.value).toBe("Dry, observant, guarded.");
+
+  // Truncated unfenced proposal JSON rejects instead of dumping raw JSON into the chat.
+  f.respond('Here they are!{"reply":"Done","changes":[{"target":"card","field":"post_history_instructions"');
+  await expect(talk("Try again.")).rejects.toThrow("invalid proposal JSON");
 });
